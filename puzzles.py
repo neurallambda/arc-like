@@ -66,16 +66,40 @@ def gen_identity_block(seq_len, min_len=2, max_len=5, max_digits=10, background=
     return sequence, sequence.copy()
 
 
+def divide_into_chunks(n, denom):
+    '''Divide `n` into `denom` number of chunks of integers, such that all chunks
+    sum to `n`. This is useful when you want to divide a sequence into `denom`
+    blocks that are roughly equal size and all add to `n`.'''
+    base_chunk = n // denom
+    remainder = n % denom
+    chunks = [base_chunk] * denom
+    for i in range(remainder):
+        chunks[i] += 1
+    return chunks
+
+
+def test_divide_into_chunks():
+    import random
+    for _ in range(100):
+        n = random.randint(1, 1000)
+        denom = random.randint(1, n)
+        chunks = divide_into_chunks(n, denom)
+        assert sum(chunks) == n, f"Sum of chunks {sum(chunks)} does not equal {n}"
+        assert len(chunks) == denom, f"Number of chunks {len(chunks)} does not equal {denom}"
+        assert all(isinstance(chunk, int) for chunk in chunks), "Not all chunks are integers"
+# test_divide_into_chunks()
+
+
 def gen_multi_identity(seq_len, num_blocks=3, min_len=2, max_len=5, max_digits=10, background=0):
     """
     Generate multiple identity blocks
     """
-    seq_len_ = seq_len // num_blocks
+    seq_lens = divide_into_chunks(seq_len, num_blocks)
     input_seq = []
     output_seq = []
 
-    for _ in range(num_blocks):
-        ii, oo = gen_identity_block(seq_len_, min_len, max_len, max_digits, background)
+    for s in seq_lens:
+        ii, oo = gen_identity_block(s, min_len, max_len, max_digits, background)
         input_seq += ii
         output_seq += oo
 
