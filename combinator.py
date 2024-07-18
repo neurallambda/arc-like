@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import torch
 from torch.utils.data import TensorDataset
 import matplotlib.colors as mcolors
@@ -71,6 +72,31 @@ def bijective_puz(f: Callable[[Seq, int], Val]) -> Puz:
 # combinators
 # ==============================================================================
 
+class Combinator(ABC):
+    description: str
+    
+    def __init__(self, name: str, apply: Puz):
+        self.name_ = name
+        self.apply = apply
+
+    @property
+    def name(self):
+        return self.name_
+
+    def __call__(self, seq: Seq) -> Any:
+        self.apply(seq)
+
+class Translate(Combinator):
+    description = """
+    Translates the sequence to the right by `n`. Wraps.
+    """.strip()
+
+    def __init__(self, n: int):
+        super().__init__(
+            f"translate(n={n})",
+            bijective_puz(lambda s, i: s[(i - n) % seq_len])
+        )
+
 def translate(n: int) -> Puz:
     """
     Translates the sequence to the right by `n`.
@@ -78,18 +104,61 @@ def translate(n: int) -> Puz:
     """
     return bijective_puz(lambda s, i: s[(i - n) % seq_len])
 
+class Reflect(Combinator):
+    description = """
+    Reflects the sequence about the index `i_pivot`. Wraps.
+    """.strip()
+    
+    def __init__(self, i_pivot: int):
+        super().__init__(
+            f"reflect(i_pivot={i_pivot})",
+            bijective_puz(lambda s, i: s[(-(i - i_pivot) + i_pivot) % seq_len])
+        )
+
 def reflect(i_pivot: int) -> Puz:
     """
-    Reflects the sequence about the index `i_pivot`.
-    Wraps.
+    Reflects the sequence about the index `i_pivot`. Wraps.
     """
     return bijective_puz(lambda s, i: s[(-(i - i_pivot) + i_pivot) % seq_len])
+
+class Colorshift(Combinator):
+    description = """
+    Adds `n` to the color of each non-background element.
+    """.strip()
+    
+    def __init__(self, n: int):
+        super().__init__(
+            f"colorshift(n={n})",
+            bijective_puz(lambda s, i: s[i] + n if s[i] != bg else s[i])
+        )
 
 def colorshift(n: int) -> Puz:
     """
     Adds `n` to the color of each non-background element.
     """
     return bijective_puz(lambda s, i: s[i] + n if s[i] != bg else s[i])
+
+class Colorshift(Combinator):
+    description = """
+    Adds `n` to the color of each non-background element.
+    """.strip()
+    
+    def __init__(self, n: int):
+        def mode_non_bg(s: Seq):
+            """
+            Returns the most common non-`bg` value in `s`.
+            If `s` is all `bg`, then return `bg`.
+            """
+            counts: list[tuple[Val, int]] = [ (x, s.count(s)) for x in set(s) if x != bg ]
+            counts.sort(key=lambda x_count: x_count[1])
+            return counts[0][0] if len(counts) != 0 else bg
+        super().__init__(
+            f"colorshift(n={n})",
+            lambda s: [
+                mode_non_bg([ s[j % seq_len] for j in range(i - n, i + n + 1) ])
+                for i in range(seq_len)
+            ]
+        )
 
 def expand(n: int) -> Puz:
     """
@@ -141,7 +210,7 @@ if __name__ == "__main__":
             bg
             for i in range(seq_len)
         ])
-
+    
     puzzles: dict[str, tuple[Puz, Callable[[], Seq]]] = {
         "translate":                        (fold_thn([translate(4)]),                                gen_some_blocks),
         "reflect":                          (fold_thn([reflect(seq_len//2)]),                         gen_some_blocks),
