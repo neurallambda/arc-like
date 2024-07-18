@@ -4,7 +4,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import random
 from random import randrange, choice, randint, shuffle, sample
-from typing import Any, Callable, Dict
+from typing import Any, Callable
 
 from visualization import visualize_datasets
 
@@ -64,6 +64,9 @@ def fold_thn(fs: list[ Callable[[Any], Any] ]) -> Callable[[Any], Any]:
     else:
         return thn(fs[0], fold_thn(fs[1:]))
 
+def bijective_puz(f: Callable[[Seq, int], Val]) -> Puz:
+    return lambda s: [ f(s, i) for i in range(seq_len) ]
+
 # ==============================================================================
 # combinators
 # ==============================================================================
@@ -73,37 +76,20 @@ def translate(n: int) -> Puz:
     Translates the sequence to the right by `n`.
     Wraps.
     """
-    def puz(s: Seq) -> Seq:
-        s_new = bg_seq()
-        for i in range(len(s)):
-            s_new[i] = s[i - n % len(s)]
-        return s_new
-    return puz
+    return bijective_puz(lambda s, i: s[(i - n) % seq_len])
 
 def reflect(i_pivot: int) -> Puz:
     """
     Reflects the sequence about the index `i_pivot`.
     Wraps.
     """
-    def puz(s: Seq) -> Seq:
-        s_new = bg_seq()
-        # shift s so that index i is at 0, then negate, then shift back, and
-        # make sure to mod by len to properly wrap
-        for i in range(len(s)):
-            s_new[i] = s[(-(i - i_pivot) + i_pivot) % len(s)]
-        return s_new
-    return puz
+    return bijective_puz(lambda s, i: s[(-(i - i_pivot) + i_pivot) % seq_len])
 
 def colorshift(n: int) -> Puz:
     """
     Adds `n` to the color of each non-background element.
     """
-    def puz(s: Seq) -> Seq:
-        s_new = bg_seq()
-        for i in range(len(s)):
-            s_new[i] = s[i] + n if s[i] != bg else bg
-        return s_new
-    return puz
+    return bijective_puz(lambda s, i: s[i] + n if s[i] != bg else s[i])
 
 # ==============================================================================
 # main
@@ -112,30 +98,32 @@ def colorshift(n: int) -> Puz:
 if __name__ == "__main__":
     num_samples = 10
 
-    def generate_input() -> Seq:
+    def gen_two_blocks() -> Seq:
         """
         Randomly generate a sequence to use as input to a `Puz`.
         """
-        s = bg_seq()
         n = random.randrange(0, seq_len)
-        for i in range(n, n + 4):
-            s[i % seq_len] = 1
-        for i in range(n + 8, n + 12):
-            s[i % seq_len] = 2
-        return s
+        return translate(n)([
+            1   if i in range(0, 4) else 
+            2   if i in range(8, 12) else 
+            bg
+            
+            for i in range(seq_len)
+        ])
 
-    puzzles: dict[str, Puz] = {}
-    puzzles["translate"] = fold_thn([translate(4)])
-    puzzles["reflect"] = fold_thn([reflect(seq_len//2)])
-    puzzles["colorshift"] = fold_thn([colorshift(2)])
-    puzzles["translate; reflect"] = fold_thn([translate(4), reflect(seq_len//2)])
-    puzzles["translate; colorshift"] = fold_thn([translate(4), colorshift(2)])
+    puzzles: dict[str, tuple[Puz, Callable[[], Seq]]] = {
+        "translate": (fold_thn([translate(4)]), gen_two_blocks),
+        "reflect": (fold_thn([reflect(seq_len//2)]), gen_two_blocks),
+        "colorshift": (fold_thn([colorshift(2)]), gen_two_blocks),
+        "translate; reflect": (fold_thn([translate(4), reflect(seq_len//2)]), gen_two_blocks),
+        "translate; colorshift": (fold_thn([translate(4), colorshift(2)]), gen_two_blocks),
+    }
 
     datasets = {}
-    for name, puz in puzzles.items():
+    for name, (puz, gen) in puzzles.items():
         inputs, outputs = [], []
         for _ in range(num_samples):
-            input = generate_input()
+            input = gen()
             output = puz(input)
             inputs.append(input)
             outputs.append(output)
