@@ -1,31 +1,26 @@
-import random
-from random import randrange, choice, randint, shuffle, sample
-
-from visualization import visualize_datasets
-random.seed(777)
-
-from typing import Any, Callable, Dict
-
 import torch
 from torch.utils.data import TensorDataset
-
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+import random
+from random import randrange, choice, randint, shuffle, sample
+from typing import Any, Callable, Dict
 
-'''
-parameters
-    Val: type
-    bg: Val # background
-    seq_len: int
-definitions
-    Seq = list[val, seq_len]
-'''
+from visualization import visualize_datasets
+
+random.seed(777)
+
+# ==============================================================================
+# parameters
+# ==============================================================================
 
 Val = int
-bg: Val = 0
+bg: Val = 0 # background value
+
+Seq = list[Val] # type of sequences
 seq_len: int = 16
-Seq = list[Val]
-Puz = Callable[[Seq], Seq]
+
+Puz = Callable[[Seq], Seq] # type of puzzles
 
 '''
 An idea for algorithmically creating new puzzles: define a collection of
@@ -36,10 +31,10 @@ combinators
     - `x : A -> Seq -> Seq`,
     - `y : B -> Seq -> Seq`, and
     - `z : C -> Seq -> Seq`
-then we can construct the puzzle `lambda seq: z(c, y(b, x(a, seq)))`.
+then we can construct the puzzle `lambda s: z(c, y(b, x(a, s)))`.
 
 I'm imagining that the combinators will be common sorts of transformations. But
-is of coursean interesting question of how to classify terms of `Seq -> Seq`
+is of course an interesting question of how to classify terms of `Seq -> Seq`
 into "good puzzles" and "bad puzzles".
 '''
 
@@ -52,11 +47,18 @@ def bg_seq() -> Seq:
 
 def thn(g: Callable, f: Callable) -> Callable:
     """
-    f then g
+    g then f
     """
     return lambda x: f(g(x))
 
 def fold_thn(fs: list[ Callable[[Any], Any] ]) -> Callable[[Any], Any]:
+    """
+    f_1 then ... then f_n i.e.
+        fold_thn([f_1, ..., f_n]) = lambda x: f_n(... f_1(x))
+
+    Note that
+        fold_thn([]) = lambda x: x
+    """
     if len(fs) == 0:
         return lambda x: x
     else:
