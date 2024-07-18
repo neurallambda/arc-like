@@ -149,6 +149,8 @@ if __name__ == "__main__":
         "translate; reflect":               (fold_thn([translate(4), reflect(seq_len//2)]),           gen_some_blocks),
         "translate; colorshift":            (fold_thn([translate(4), colorshift(2)]),                 gen_some_blocks),
         "expand":                           (fold_thn([expand(1)]),                                   gen_some_pixels),
+        "expand; colorshift":               (fold_thn([expand(1), colorshift(2)]),                    gen_some_pixels),
+        "expand; translate":                (fold_thn([expand(1), translate(1)]),                     gen_some_pixels),
     }
 
     datasets = {}
@@ -162,4 +164,4 @@ if __name__ == "__main__":
         inputs_tensor, outputs_tensor = torch.tensor(inputs), torch.tensor(outputs)
         datasets[name] = TensorDataset(inputs_tensor, outputs_tensor)
 
-    visualize_datasets(datasets, grid_width=4, grid_height=7, num_samples=num_samples)
+    visualize_datasets(datasets, grid_width=4, grid_height=2, num_samples=num_samples)
