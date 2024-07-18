@@ -91,6 +91,25 @@ def colorshift(n: int) -> Puz:
     """
     return bijective_puz(lambda s, i: s[i] + n if s[i] != bg else s[i])
 
+def expand(n: int) -> Puz:
+    """
+    Expand each value in the input sequence to fill each pixel within `n` of it
+    in the output sequence.
+    """
+    def mode_non_bg(s: Seq):
+        """
+        Returns the most common non-`bg` value in `s`.
+        If `s` is all `bg`, then return `bg`.
+        """
+        counts: list[tuple[Val, int]] = [ (x, s.count(s)) for x in set(s) if x != bg ]
+        counts.sort(key=lambda x_count: x_count[1])
+        return counts[0][0] if len(counts) != 0 else bg
+        
+    return lambda s: [
+        mode_non_bg([ s[j % seq_len] for j in range(i - n, i + n + 1) ])
+        for i in range(seq_len)
+    ]
+
 # ==============================================================================
 # main
 # ==============================================================================
@@ -98,25 +117,38 @@ def colorshift(n: int) -> Puz:
 if __name__ == "__main__":
     num_samples = 10
 
-    def gen_two_blocks() -> Seq:
+    def gen_some_pixels(colors=[1,2,3,4]) -> Seq:
+        random.shuffle(colors)
+        n = random.randrange(0, seq_len)
+        return translate(n)([
+            colors[0 % len(colors)] if i == 0 else
+            colors[1 % len(colors)] if i == 4 else
+            colors[2 % len(colors)] if i == 8 else
+            colors[3 % len(colors)] if i == 12 else
+            bg
+            for i in range(seq_len)
+        ])
+
+    def gen_some_blocks(colors=[1,2]) -> Seq:
         """
         Randomly generate a sequence to use as input to a `Puz`.
         """
+        random.shuffle(colors)
         n = random.randrange(0, seq_len)
         return translate(n)([
-            1   if i in range(0, 4) else 
-            2   if i in range(8, 12) else 
+            colors[0 % len(colors)]   if i in range(0, 4) else
+            colors[1 % len(colors)]   if i in range(8, 12) else
             bg
-            
             for i in range(seq_len)
         ])
 
     puzzles: dict[str, tuple[Puz, Callable[[], Seq]]] = {
-        "translate": (fold_thn([translate(4)]), gen_two_blocks),
-        "reflect": (fold_thn([reflect(seq_len//2)]), gen_two_blocks),
-        "colorshift": (fold_thn([colorshift(2)]), gen_two_blocks),
-        "translate; reflect": (fold_thn([translate(4), reflect(seq_len//2)]), gen_two_blocks),
-        "translate; colorshift": (fold_thn([translate(4), colorshift(2)]), gen_two_blocks),
+        "translate":                        (fold_thn([translate(4)]),                                gen_some_blocks),
+        "reflect":                          (fold_thn([reflect(seq_len//2)]),                         gen_some_blocks),
+        "colorshift":                       (fold_thn([colorshift(2)]),                               gen_some_blocks),
+        "translate; reflect":               (fold_thn([translate(4), reflect(seq_len//2)]),           gen_some_blocks),
+        "translate; colorshift":            (fold_thn([translate(4), colorshift(2)]),                 gen_some_blocks),
+        "expand":                           (fold_thn([expand(1)]),                                   gen_some_pixels),
     }
 
     datasets = {}
