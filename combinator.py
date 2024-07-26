@@ -23,7 +23,7 @@ class Sequence:
 
 Combinator = Callable[[Sequence], Sequence]
 
-def compose_transformers(transformers: List[Combinator]) -> Combinator:
+def compose(transformers: List[Combinator]) -> Combinator:
     """ Compose multiple sequence transformers into a single transformer. """
     def composed_transformer(seq: Sequence) -> Sequence:
         for transformer in transformers:
@@ -141,13 +141,12 @@ def right_align(seq: Sequence) -> Sequence:
     return Sequence(seq.inputs, aligned_outputs, seq.metadata)
 
 
-def add_noise(p, colors: List[int]) -> Combinator:
-    """Add noise to the input sequence."""
+def add_bg_noise(p, colors: List[int], background_color:int = 0) -> Combinator:
+    """Add noise to the background pixels of the input sequence."""
     def transformer(seq: Sequence) -> Sequence:
         outputs = seq.outputs
         new_outputs = [
-            random.choice([0] + [c for c in colors if c != 0]
-                          ) if random.random() < p else pixel
+            random.choice([0] + [c for c in colors if c != 0]) if pixel == background_color and random.random() < p else pixel
             for pixel in outputs
         ]
         return Sequence(seq.inputs, new_outputs, seq.metadata)
@@ -157,36 +156,39 @@ def add_noise(p, colors: List[int]) -> Combinator:
 ##########
 # Starting points
 
-def gen_some_blocks(colors: List[int], seq_length=48, background_color=0) -> Sequence:
+def gen_some_blocks(colors: List[int], seq_length=48, background_color=0) -> Combinator:
     """ Generate a sequence of blocks with random colors. """
-    init = [background_color] * seq_length
-    current_color = background_color
-    is_in_block = False
-    for i in range(seq_length):
-        if not is_in_block and random.random() > 0.5:  # start block
-            is_in_block = True
-            current_color = random.choice(colors)
-        if is_in_block and random.random() > 0.8:  # terminate block
-            is_in_block = False
-        if is_in_block:  # paint block
-            init[i] = current_color
+    def generator(seq: Sequence) -> Sequence:
+        init = [background_color] * seq_length
+        current_color = background_color
+        is_in_block = False
+        for i in range(seq_length):
+            if not is_in_block and random.random() > 0.5:  # start block
+                is_in_block = True
+                current_color = random.choice(colors)
+            if is_in_block and random.random() > 0.8:  # terminate block
+                is_in_block = False
+            if is_in_block:  # paint block
+                init[i] = current_color
+        return Sequence(init, init, None)
+    return generator
 
-    return Sequence(init, init, None)
 
-
-def gen_one_block(colors: List[int], seq_length=48, background_color=0) -> Sequence:
+def gen_one_block(colors: List[int], seq_length=48, background_color=0) -> Combinator:
     """ Generate a sequence of a single block with a random color. """
-    block_size = 5
-    start_ix = random.randint(block_size, seq_length - block_size)
-    end_ix = start_ix + block_size
-    color = random.choice(colors)
+    def generator(seq: Sequence) -> Sequence:
+        block_size = 5
+        start_ix = random.randint(block_size, seq_length - block_size)
+        end_ix = start_ix + block_size
+        color = random.choice(colors)
 
-    init = [background_color] * seq_length
-    init[start_ix:end_ix] = [color] * block_size
-    return Sequence(init, init, None)
+        init = [background_color] * seq_length
+        init[start_ix:end_ix] = [color] * block_size
+        return Sequence(init, init, None)
+    return generator
 
 
-def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> Sequence:
+def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> Combinator:
     """
     Generate a sequence with pixels scattered randomly with probability p.
 
@@ -196,13 +198,15 @@ def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> 
     seq_length (int): Length of the sequence to generate. Default is 48.
 
     Returns:
-    List[int]: A sequence with randomly scattered pixels.
+    Combinator: A function that generates a new Sequence with randomly scattered pixels.
     """
-    init = [
-        random.choice(colors) if random.random() < p else 0
-        for _ in range(seq_length)
-    ]
-    return Sequence(init, init, None)
+    def generator(seq: Sequence) -> Sequence:
+        init = [
+            random.choice(colors) if random.random() < p else 0
+            for _ in range(seq_length)
+        ]
+        return Sequence(init, init, None)
+    return generator
 
 
 ##########
@@ -213,42 +217,43 @@ random.seed(42)
 colors = [1, 2, 3, 4, 6, 7, 8, 9]
 
 puzzles = [
-    ('translate(4)', translate(4), gen_some_blocks),
-    ('reflect(seq_len//2)', reflect(24), gen_one_block),
-    ('colorshift(2)', colorshift(2), gen_some_blocks),
+    ('translate(4)', compose([gen_some_blocks(colors), translate(4)])),
+    ('reflect(seq_len//2)', compose([gen_one_block(colors), reflect(24)])),
+    ('colorshift(2)', compose([gen_some_blocks(colors), colorshift(2)])),
     ('translate(4) + reflect(seq_len//2)',
-     compose_transformers([translate(4), reflect(24)]), gen_some_blocks),
+     compose([gen_some_blocks(colors), translate(4), reflect(24)])),
     ('translate(4) + colorshift(2)',
-     compose_transformers([translate(4), colorshift(2)]), gen_some_blocks),
-    ('expand(1)', expand(1), gen_some_blocks),
-    ('expand(1) expand(1)', compose_transformers(
-        [expand(1), expand(1)]), gen_some_blocks),
+     compose([gen_some_blocks(colors), translate(4), colorshift(2)])),
+    ('expand(1)', compose([gen_some_blocks(colors), expand(1)])),
+    ('expand(1) expand(1)', compose(
+        [gen_some_blocks(colors), expand(1), expand(1)])),
     ('expand(1) + colorshift(2)',
-     compose_transformers([expand(1), colorshift(2)]), gen_some_blocks),
+     compose([gen_some_blocks(colors), expand(1), colorshift(2)])),
     ('expand(1) + translate(1)',
-     compose_transformers([expand(1), translate(1)]), gen_some_blocks),
-    ('shrink', shrink, gen_some_blocks),
+     compose([gen_some_blocks(colors), expand(1), translate(1)])),
+    ('shrink', compose([gen_some_blocks(colors), shrink])),
     ('shrink + expand(2)',
-     compose_transformers([shrink, expand(2)]), gen_some_blocks),
-    ('endpoints', endpoints, gen_some_blocks),
+     compose([gen_some_blocks(colors), shrink, expand(2)])),
+    ('endpoints', compose([gen_some_blocks(colors), endpoints])),
+    ('infill', compose([gen_some_blocks(colors), endpoints, swap])),
     ('expand(1) + endpoints',
-     compose_transformers([expand(1), endpoints]), gen_one_block),
+     compose([gen_one_block(colors), expand(1), endpoints])),
     ('endpoints + expand(1)',
-     compose_transformers([endpoints, expand(1)]), gen_one_block),
+     compose([gen_one_block(colors), endpoints, expand(1)])),
     ('endpoints + expand(4) + endpoints + expand(1)',
-     compose_transformers([endpoints, expand(4), endpoints, expand(1)]), gen_one_block),
-    ('right_align', right_align, gen_some_pixels),
-    ('denoise', compose_transformers([swap, add_noise(0.3, colors), swap]), gen_one_block)
+     compose([gen_one_block(colors), endpoints, expand(4), endpoints, expand(1)])),
+    ('right_align', compose([gen_some_pixels(colors), right_align])),
+    ('denoise', compose([gen_one_block(colors), swap, add_bg_noise(0.3, colors), swap]))
 ]
 
 datasets = {}
 num_samples = 10
 grid_width = 4
 grid_height = 5
-for (name, transformer, gen) in puzzles:
+for (name, transformer) in puzzles:
     all_inputs, all_outputs = [], []
     for _ in range(num_samples):
-        seq = gen(colors)
+        seq = Sequence([], [], None)
         seq = transformer(seq)
         all_inputs.append(seq.inputs)
         all_outputs.append(seq.outputs)
