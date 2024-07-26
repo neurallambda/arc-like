@@ -1,3 +1,13 @@
+'''
+
+Combinators for manipulating 1D sequences of integers. The integer value
+represents color. A motivating idea behind this library is to embody physical
+intuitions by creating combinators that are analogies of the geometric/physical
+world. For instance translation and reflection move blocks together, in a
+sense.
+
+'''
+
 from typing import Callable, List, Any
 import random
 from torch.utils.data import TensorDataset
@@ -98,6 +108,25 @@ def endpoints(seq: List[int]) -> List[int]:
         new_seq[end1 % len(seq)] = span["val"]
     return new_seq
 
+def collect_non_background(seq: List[int]) -> List[int]:
+    """Collect all non-background colors (non-zero integers) from the sequence."""
+    return [color for color in seq if color != 0]
+
+def right_align(seq: List[int]) -> List[int]:
+    """Right-align all non-background colors in the sequence."""
+    non_bg_colors = collect_non_background(seq)
+    aligned_seq = [0] * (len(seq) - len(non_bg_colors)) + non_bg_colors
+    return aligned_seq
+
+def right_align_puzzle() -> SequenceTransformer:
+    """Create a puzzle that right-aligns all non-background colors."""
+    return right_align
+
+
+
+
+##########
+# Starting points
 
 def gen_some_blocks(colors: List[int]) -> List[int]:
     """ Generate a sequence of blocks with random colors. """
@@ -123,6 +152,24 @@ def gen_one_block(colors: int) -> List[int]:
     ])
 
 
+def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> List[int]:
+    """
+    Generate a sequence with pixels scattered randomly with probability p.
+
+    Args:
+    colors (List[int]): List of available colors (excluding background color 0).
+    p (float): Probability of a pixel being a non-background color. Default is 0.2.
+    seq_length (int): Length of the sequence to generate. Default is 48.
+
+    Returns:
+    List[int]: A sequence with randomly scattered pixels.
+    """
+    return [
+        random.choice(colors) if random.random() < p else 0
+        for _ in range(seq_length)
+    ]
+
+
 ##########
 # Demo
 
@@ -145,7 +192,8 @@ puzzles = [
     ('endpoints', endpoints, gen_some_blocks),
     ('expand(1) + endpoints', compose_transformers([expand(1), endpoints]), gen_one_block),
     ('endpoints + expand(1)', compose_transformers([endpoints, expand(1)]), gen_one_block),
-    ('endpoints + expand(4) + endpoints + expand(1)', compose_transformers([endpoints, expand(4), endpoints, expand(1)]), gen_one_block)
+    ('endpoints + expand(4) + endpoints + expand(1)', compose_transformers([endpoints, expand(4), endpoints, expand(1)]), gen_one_block),
+    ('right_align', right_align, gen_some_pixels),
 ]
 
 datasets = {}
