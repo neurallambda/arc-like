@@ -8,56 +8,62 @@ sense.
 
 '''
 
-from typing import Callable, List, Any
+from typing import Callable, List, Any, Tuple
 import random
 from torch.utils.data import TensorDataset
 import torch
 
 from visualization import visualize_datasets
 
-
+SequencePair = Tuple[List[int], List[int]]
 SequenceTransformer = Callable[[List[Any]], List[Any]]
 
 
 def compose_transformers(transformers: List[SequenceTransformer]) -> SequenceTransformer:
     """ Compose multiple sequence transformers into a single transformer. """
-    def composed_transformer(seq: List[int]) -> List[int]:
+    def composed_transformer(seq: SequencePair) -> SequencePair:
         for transformer in transformers:
             seq = transformer(seq)
         return seq
     return composed_transformer
 
 
-def create_transformer(func: Callable[[List[int], int], int]) -> SequenceTransformer:
-    """ Create a sequence transformer from a function that takes a sequence and an index as input. """
-    def transformer(seq: List[int]) -> List[int]:
-        return [func(seq, i) for i in range(len(seq))]
-    return transformer
+def swap(pair: SequencePair) -> SequencePair:
+    """ Swap the input and output sequences. """
+    return (pair[1], pair[0])
 
 
 def translate(n: int) -> SequenceTransformer:
     """ Translate the sequence by n positions. """
-    return create_transformer(lambda seq, i: seq[(i - n) % len(seq)])
+    def f(pair):
+        inputs, outputs = pair
+        # return lift_fn(lambda seq, i: seq[(i - n) % len(seq)])
+        return (inputs, outputs[:-n] + outputs[-n:])
+    return f
 
 
 def reflect(i_pivot: int) -> SequenceTransformer:
     """ Reflect the sequence about the index i_pivot. """
-    return create_transformer(lambda seq, i: seq[(-(i - i_pivot) + i_pivot) % len(seq)])
+    def f(pair):
+        inputs, outputs = pair
+        return (inputs, [outputs[(-(i - i_pivot) + i_pivot) % len(outputs)] for i in range(len(outputs))])
+    return f
 
 
 def colorshift(n: int) -> SequenceTransformer:
     """ Shift the color of each element in the sequence by n. """
-    return create_transformer(lambda seq, i: seq[i] + n if seq[i] != 0 else seq[i])
+    return lift_fn(lambda seq, i: seq[i] + n if seq[i] != 0 else seq[i])
 
 
-def shrink(seq: List[int]) -> List[int]:
+def shrink(pair: SequencePair) -> SequencePair:
     """For each span of consecutive instances of a specific value, map the
     midpoint of the range to that value and the rest of the range to 0."""
-    new_seq = [0] * len(seq)
+    inputs, outputs = pair
+    new_outputs = [0] * len(outputs)
     spans = []
-    current_span = {"start": 0, "val": seq[0], "len": 1}
+    current_span = {"start": 0, "val": outputs[0], "len": 1}
 
-    for i, v in enumerate(seq[1:], 1):
+    for i, v in enumerate(outputs[1:], 1):
         if v == current_span["val"]:
             current_span["len"] += 1
         else:
@@ -67,34 +73,36 @@ def shrink(seq: List[int]) -> List[int]:
 
     for span in spans:
         mid = span["start"] + span["len"] // 2
-        new_seq[mid % len(seq)] = span["val"]
+        new_outputs[mid % len(outputs)] = span["val"]
 
-    return new_seq
+    return (inputs, new_outputs)
 
 
 def expand(n: int) -> SequenceTransformer:
     """Expand each value in the input sequence to fill each pixel within `n` of it
     in the output sequence. """
-    def transformer(seq: List[int]) -> List[int]:
+    def transformer(pair: SequencePair) -> SequencePair:
         def mode_non_bg(s: List[int]):
             counts = [(x, s.count(x)) for x in set(s) if x != 0]
             counts.sort(key=lambda x_count: x_count[1], reverse=True)
             return counts[0][0] if counts else 0
 
-        return [
-            mode_non_bg([seq[j % len(seq)] for j in range(i - n, i + n + 1)])
-            for i in range(len(seq))
-        ]
+        inputs, outputs = pair
+        return (inputs, [
+            mode_non_bg([outputs[j % len(outputs)] for j in range(i - n, i + n + 1)])
+            for i in range(len(outputs))
+        ])
 
     return transformer
 
 
-def endpoints(seq: List[int]) -> List[int]:
+def endpoints(pair: SequencePair) -> SequencePair:
     ''' Identify the start/end of each block '''
-    new_seq = [0] * len(seq)
+    inputs, outputs = pair
+    new_outputs = [0] * len(outputs)
     spans = []
-    current_span = {"start": 0, "val": seq[0], "len": 1}
-    for i, v in enumerate(seq[1:]):
+    current_span = {"start": 0, "val": outputs[0], "len": 1}
+    for i, v in enumerate(outputs[1:]):
         if v == current_span["val"]:
             current_span["len"] += 1
         else:
@@ -103,56 +111,67 @@ def endpoints(seq: List[int]) -> List[int]:
     spans.append(current_span)
     for span in spans:
         end0 = span["start"]
-        new_seq[end0 % len(seq)] = span["val"]
+        new_outputs[end0 % len(outputs)] = span["val"]
         end1 = span["start"] + span["len"] - 1
-        new_seq[end1 % len(seq)] = span["val"]
-    return new_seq
+        new_outputs[end1 % len(outputs)] = span["val"]
+    return (inputs, new_outputs)
 
 def collect_non_background(seq: List[int]) -> List[int]:
     """Collect all non-background colors (non-zero integers) from the sequence."""
     return [color for color in seq if color != 0]
 
-def right_align(seq: List[int]) -> List[int]:
+def right_align(pair: SequencePair) -> SequencePair:
     """Right-align all non-background colors in the sequence."""
-    non_bg_colors = collect_non_background(seq)
-    aligned_seq = [0] * (len(seq) - len(non_bg_colors)) + non_bg_colors
-    return aligned_seq
+    inputs, outputs = pair
+    non_bg_colors = collect_non_background(outputs)
+    aligned_outputs = [0] * (len(outputs) - len(non_bg_colors)) + non_bg_colors
+    return (inputs, aligned_outputs)
 
-def right_align_puzzle() -> SequenceTransformer:
-    """Create a puzzle that right-aligns all non-background colors."""
-    return right_align
-
-
+def add_noise(p: float = 0.2) -> SequenceTransformer:
+    """Add noise to the input sequence."""
+    def transformer(pair: SequencePair) -> SequencePair:
+        inputs, outputs = pair
+        noisy_seq = [
+            random.choice([0] + [c for c in set(inputs) if c != 0]) if random.random() < p else pixel
+            for pixel in inputs
+        ]
+        return (noisy_seq, outputs)
+    return transformer
 
 
 ##########
 # Starting points
 
-def gen_some_blocks(colors: List[int]) -> List[int]:
+def gen_some_blocks(colors: List[int], seq_length=48, background_color=0) -> SequencePair:
     """ Generate a sequence of blocks with random colors. """
-    t = 48 // 6
-    n = random.randrange(t, 2 * t)
-    return translate(n)([
-        colors[0 % len(colors)] if i in range(0 * t, 1 * t) else
-        colors[1 % len(colors)] if i in range(3 * t, 4 * t) else
-        0
-        for i in range(48)
-    ])
+    init = [background_color] * seq_length
+    current_color = background_color
+    is_in_block = False
+    for i in range(seq_length):
+        if not is_in_block and random.random() > 0.5:  # start block
+            is_in_block = True
+            current_color = random.choice(colors)
+        if is_in_block and random.random() > 0.8:  # terminate block
+            is_in_block = False
+        if is_in_block:  # paint block
+            init[i] = current_color
+
+    return (init, init)
 
 
-def gen_one_block(colors: int) -> List[int]:
+def gen_one_block(colors: int, seq_length=48, background_color=0) -> SequencePair:
     """ Generate a sequence of a single block with a random color. """
-    t = 48 // 3
-    n = random.randrange(1 * t, 1.5 * t)
+    block_size = 5
+    start_ix = random.randint(block_size, seq_length - block_size)
+    end_ix = start_ix + block_size
     color = random.choice(colors)
-    return translate(n)([
-        color if i in range(0 * t, 1 * t) else
-        0
-        for i in range(48)
-    ])
+
+    init = [background_color] * seq_length
+    init[start_ix:end_ix] = [color] * block_size
+    return (init, init)
 
 
-def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> List[int]:
+def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> SequencePair:
     """
     Generate a sequence with pixels scattered randomly with probability p.
 
@@ -164,10 +183,11 @@ def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> 
     Returns:
     List[int]: A sequence with randomly scattered pixels.
     """
-    return [
+    init = [
         random.choice(colors) if random.random() < p else 0
         for _ in range(seq_length)
     ]
+    return (init, init)
 
 
 ##########
@@ -179,21 +199,26 @@ colors = [1, 2, 3, 4, 6, 7, 8, 9]
 
 puzzles = [
     ('translate(4)', translate(4), gen_some_blocks),
-    ('reflect(seq_len//2)', reflect(24), gen_some_blocks),
-    ('colorshift(2)', colorshift(2), gen_some_blocks),
-    ('translate(4) + reflect(seq_len//2)', compose_transformers([translate(4), reflect(24)]), gen_some_blocks),
-    ('translate(4) + colorshift(2)', compose_transformers([translate(4), colorshift(2)]), gen_some_blocks),
-    ('expand(1)', expand(1), gen_some_blocks),
-    ('expand(1) expand(1)', compose_transformers([expand(1), expand(1)]), gen_some_blocks),
-    ('expand(1) + colorshift(2)', compose_transformers([expand(1), colorshift(2)]), gen_some_blocks),
-    ('expand(1) + translate(1)', compose_transformers([expand(1), translate(1)]), gen_some_blocks),
-    ('shrink', shrink, gen_some_blocks),
-    ('shrink + expand(2)', compose_transformers([shrink, expand(2)]), gen_some_blocks),
-    ('endpoints', endpoints, gen_some_blocks),
-    ('expand(1) + endpoints', compose_transformers([expand(1), endpoints]), gen_one_block),
-    ('endpoints + expand(1)', compose_transformers([endpoints, expand(1)]), gen_one_block),
-    ('endpoints + expand(4) + endpoints + expand(1)', compose_transformers([endpoints, expand(4), endpoints, expand(1)]), gen_one_block),
-    ('right_align', right_align, gen_some_pixels),
+    ('reflect(seq_len//2)', reflect(24), gen_one_block),
+    # ('colorshift(2)', colorshift(2), gen_some_blocks),
+    # ('translate(4) + reflect(seq_len//2)', compose_transformers([translate(4), reflect(24)]), gen_some_blocks),
+    # ('translate(4) + colorshift(2)', compose_transformers([translate(4), colorshift(2)]), gen_some_blocks),
+    # ('expand(1)', expand(1), gen_some_blocks),
+    # ('expand(1) expand(1)', compose_transformers([expand(1), expand(1)]), gen_some_blocks),
+    # ('expand(1) + colorshift(2)', compose_transformers([expand(1), colorshift(2)]), gen_some_blocks),
+    # ('expand(1) + translate(1)', compose_transformers([expand(1), translate(1)]), gen_some_blocks),
+    # ('shrink', shrink, gen_some_blocks),
+    # ('shrink + expand(2)', compose_transformers([shrink, expand(2)]), gen_some_blocks),
+    # ('endpoints', endpoints, gen_some_blocks),
+    # ('expand(1) + endpoints', compose_transformers([expand(1), endpoints]), gen_one_block),
+    # ('endpoints + expand(1)', compose_transformers([endpoints, expand(1)]), gen_one_block),
+    # ('endpoints + expand(4) + endpoints + expand(1)', compose_transformers([endpoints, expand(4), endpoints, expand(1)]), gen_one_block),
+    # ('right_align', right_align, gen_some_pixels),
+    # ('denoise', compose_transformers([
+    #     gen_one_block,  # Generate a clean block
+    #     swap,  # Swap so we can add noise to the input
+    #     add_noise(0.3)  # Add noise to the input, keeping the original as output
+    # ]), gen_one_block)
 ]
 
 datasets = {}
@@ -201,13 +226,13 @@ num_samples = 10
 grid_width = 4
 grid_height = 5
 for (name, transformer, gen) in puzzles:
-    inputs, outputs = [], []
+    all_inputs, all_outputs = [], []
     for _ in range(num_samples):
-        input = gen(colors)
-        output = transformer(input)
-        inputs.append(input)
-        outputs.append(output)
-        inputs_tensor, outputs_tensor = torch.tensor(inputs), torch.tensor(outputs)
+        pair = gen(colors)
+        inputs, outputs = transformer(pair)
+        all_inputs.append(inputs)
+        all_outputs.append(outputs)
+        inputs_tensor, outputs_tensor = torch.tensor(all_inputs), torch.tensor(all_outputs)
         datasets[name] = TensorDataset(inputs_tensor, outputs_tensor)
 
 visualize_datasets(datasets, grid_width=grid_width, grid_height=grid_height, num_samples=num_samples)
