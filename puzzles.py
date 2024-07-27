@@ -97,6 +97,7 @@ def gen_three_blocks(colors: List[int], seq_length=48, background_color=0) -> Co
         return Sequence(init, init, None)
     return generator
 
+
 def gen_n_blocks(colors: List[int], n: int, seq_length=48, background_color=0, min_size=2) -> Combinator:
     """Generate a sequence with n blocks of incrementing sizes."""
     def generator(seq: Sequence) -> Sequence:
@@ -125,6 +126,7 @@ def gen_n_blocks(colors: List[int], n: int, seq_length=48, background_color=0, m
         return Sequence(init, init, {"block_positions": block_positions})
     return generator
 
+
 def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> Combinator:
     """
     Generate a sequence with pixels scattered randomly with probability p.
@@ -144,6 +146,7 @@ def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> 
         ]
         return Sequence(init, init, None)
     return generator
+
 
 def gen_random_pixel_block(colors: List[int], seq_length=48, background_color=0, min_block_size=5, max_block_size=10) -> Combinator:
     """Generate a sequence with a single block of random pixels."""
@@ -179,7 +182,7 @@ def swap(seq: Sequence) -> Sequence:
 
 def translate(n: int) -> Combinator:
     """ Translate the sequence by n positions. """
-    def f(seq):
+    def f(seq: Sequence) -> Sequence:
         outputs = seq.outputs
         new_outputs = outputs[-n:] + outputs[:-n]
         return Sequence(seq.inputs, new_outputs, seq.metadata)
@@ -499,55 +502,56 @@ def magnets(move_distance: int = 2) -> Combinator:
 ##########
 # Demo
 
-random.seed(42)
+if __name__ == '__main__':
+    random.seed(42)
 
-colors = [1, 2, 3, 4, 6, 7, 8, 9]
+    colors = [1, 2, 3, 4, 6, 7, 8, 9]
 
-puzzles = [
-    ('translate(4)', compose([gen_some_blocks(colors), translate(4)])),
-    ('reflect(seq_len//2)', compose([gen_one_block(colors), reflect(24)])),
-    ('colorshift(2)', compose([gen_some_blocks(colors), colorshift(2)])),
-    ('translate(4) + reflect(seq_len//2)', compose([gen_some_blocks(colors), translate(4), reflect(24)])),
-    ('translate(4) + colorshift(2)', compose([gen_some_blocks(colors), translate(4), colorshift(2)])),
-    ('expand(1)', compose([gen_some_blocks(colors), expand(1)])),
-    ('expand(1) expand(1)', compose([gen_some_blocks(colors), expand(1), expand(1)])),
-    ('expand(1) + colorshift(2)', compose([gen_some_blocks(colors), expand(1), colorshift(2)])),
-    ('expand(1) + translate(1)', compose([gen_some_blocks(colors), expand(1), translate(1)])),
-    ('shrink', compose([gen_some_blocks(colors), shrink])),
-    ('shrink + expand(2)', compose([gen_some_blocks(colors), shrink, expand(2)])),
-    ('endpoints', compose([gen_some_blocks(colors), endpoints])),
-    ('infill', compose([gen_some_blocks(colors), endpoints, swap])),
-    ('expand(1) + endpoints', compose([gen_one_block(colors), expand(1), endpoints])),
-    ('endpoints + expand(1)', compose([gen_one_block(colors), endpoints, expand(1)])),
-    ('endpoints + expand(4) + endpoints + expand(1)', compose([gen_one_block(colors), endpoints, expand(4), endpoints, expand(1)])),
-    ('right_align', compose([gen_some_pixels(colors), right_align])),
-    ('denoise', compose([gen_one_block(colors), swap, add_bg_noise(0.3, colors), swap])),
-    ('invert_colors', compose([gen_one_block(colors), invert_colors])),
-    ('remove_longest_blocks', compose([gen_some_blocks(colors), remove_longest_blocks])),
-    ('remove_shortest_blocks', compose([gen_some_blocks(colors), remove_shortest_blocks])),
-    ('remove_longest + endpoints', compose([gen_some_blocks(colors), remove_longest_blocks, endpoints])),
-    ('reflect-pivot', compose([gen_some_blocks(list(set(colors) - {5})), add_pivot, reflect_around_pivot])),
-    ('reflect-pivot + shrink', compose([gen_one_block(list(set(colors) - {5})), add_pivot, reflect_around_pivot, shrink])),
-    ('repaint-from-max-block', compose([gen_three_blocks(colors), repaint_max_block])),
-    ('move_to_pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, move_to_pivot])),
-    ('extend_to_pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, extend_to_pivot])),
-    ('rotate colored block', compose([gen_random_pixel_block(colors), rotate_block_pixels(1)])),
-    ('sort_pixels', compose([gen_some_pixels(colors[:3], p=0.1), sort_pixels()])),
-    ('magnets', compose([gen_n_blocks(colors, 2), magnets()])),
-]
+    puzzles = [
+        ('translate(4)', compose([gen_some_blocks(colors), translate(4)])),
+        ('reflect(seq_len//2)', compose([gen_one_block(colors), reflect(24)])),
+        ('colorshift(2)', compose([gen_some_blocks(colors), colorshift(2)])),
+        ('translate(4) + reflect(seq_len//2)', compose([gen_some_blocks(colors), translate(4), reflect(24)])),
+        ('translate(4) + colorshift(2)', compose([gen_some_blocks(colors), translate(4), colorshift(2)])),
+        ('expand(1)', compose([gen_some_blocks(colors), expand(1)])),
+        ('expand(1) expand(1)', compose([gen_some_blocks(colors), expand(1), expand(1)])),
+        ('expand(1) + colorshift(2)', compose([gen_some_blocks(colors), expand(1), colorshift(2)])),
+        ('expand(1) + translate(1)', compose([gen_some_blocks(colors), expand(1), translate(1)])),
+        ('shrink', compose([gen_some_blocks(colors), shrink])),
+        ('shrink + expand(2)', compose([gen_some_blocks(colors), shrink, expand(2)])),
+        ('endpoints', compose([gen_some_blocks(colors), endpoints])),
+        ('infill', compose([gen_some_blocks(colors), endpoints, swap])),
+        ('expand(1) + endpoints', compose([gen_one_block(colors), expand(1), endpoints])),
+        ('endpoints + expand(1)', compose([gen_one_block(colors), endpoints, expand(1)])),
+        ('endpoints + expand(4) + endpoints + expand(1)', compose([gen_one_block(colors), endpoints, expand(4), endpoints, expand(1)])),
+        ('right_align', compose([gen_some_pixels(colors), right_align])),
+        ('denoise', compose([gen_one_block(colors), swap, add_bg_noise(0.3, colors), swap])),
+        ('invert_colors', compose([gen_one_block(colors), invert_colors])),
+        ('remove_longest_blocks', compose([gen_some_blocks(colors), remove_longest_blocks])),
+        ('remove_shortest_blocks', compose([gen_some_blocks(colors), remove_shortest_blocks])),
+        ('remove_longest + endpoints', compose([gen_some_blocks(colors), remove_longest_blocks, endpoints])),
+        ('reflect-pivot', compose([gen_some_blocks(list(set(colors) - {5})), add_pivot, reflect_around_pivot])),
+        ('reflect-pivot + shrink', compose([gen_one_block(list(set(colors) - {5})), add_pivot, reflect_around_pivot, shrink])),
+        ('repaint-from-max-block', compose([gen_three_blocks(colors), repaint_max_block])),
+        ('move_to_pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, move_to_pivot])),
+        ('extend_to_pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, extend_to_pivot])),
+        ('rotate colored block', compose([gen_random_pixel_block(colors), rotate_block_pixels(1)])),
+        ('sort_pixels', compose([gen_some_pixels(colors[:3], p=0.1), sort_pixels()])),
+        ('magnets', compose([gen_n_blocks(colors, 2), magnets()])),
+    ]
 
-datasets = {}
-num_samples = 10
-grid_width = 7
-grid_height = 5
-for (name, transformer) in puzzles:
-    all_inputs, all_outputs = [], []
-    for _ in range(num_samples):
-        seq = Sequence([], [], None)
-        seq = transformer(seq)
-        all_inputs.append(seq.inputs)
-        all_outputs.append(seq.outputs)
-        inputs_tensor, outputs_tensor = torch.tensor(all_inputs), torch.tensor(all_outputs)
-        datasets[name] = TensorDataset(inputs_tensor, outputs_tensor)
+    datasets = {}
+    num_samples = 10
+    grid_width = 7
+    grid_height = 5
+    for (name, transformer) in puzzles:
+        all_inputs, all_outputs = [], []
+        for _ in range(num_samples):
+            seq = Sequence([], [], None)
+            seq = transformer(seq)
+            all_inputs.append(seq.inputs)
+            all_outputs.append(seq.outputs)
+            inputs_tensor, outputs_tensor = torch.tensor(all_inputs), torch.tensor(all_outputs)
+            datasets[name] = TensorDataset(inputs_tensor, outputs_tensor)
 
-visualize_datasets(datasets, grid_width=grid_width, grid_height=grid_height, num_samples=num_samples)
+    visualize_datasets(datasets, grid_width=grid_width, grid_height=grid_height, num_samples=num_samples)
