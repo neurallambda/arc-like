@@ -1,981 +1,553 @@
 '''
 
-Synthetic Data representing visual puzzles in one dimension, such as blocks moving around, or denoising.
+Combinators for manipulating 1D sequences of integers. The integer value
+represents color. A motivating idea behind this library is to embody physical
+intuitions by creating combinators that are analogies of the geometric/physical
+world. For instance translation and reflection move blocks together, in a
+sense.
 
 '''
 
+from typing import Callable, List, Any, Tuple
 import random
-from random import randrange, choice, randint, shuffle, sample
-from typing import Callable, Dict
-
-import torch
 from torch.utils.data import TensorDataset
-
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
-
+import torch
+from dataclasses import dataclass
 from visualization import visualize_datasets
 
 
-##################################################
-# Random Identity
+@dataclass
+class Sequence:
+    ''' An input-output pairing, and metadata that might be used by downstream combinators. '''
+    inputs: List[Any]
+    outputs: List[Any]
+    metadata: Any
 
-def gen_random_identity(seq_len, max_digits=10, background=0):
+
+# A `Combinator` translates a `Sequence` to a new `Sequence`.
+#
+# Note: each combinator has control over both inputs and outputs
+# simultaneously. This has the practical effect of combinators operating from
+# the "middle out". An initial input-output pairing is generated in the
+# beginning, and then the eventual pairing may mutate the input into something
+# different than it was initialized to at the start. This is useful for
+# instance in the denoising task, where the clean block we generate at the
+# start actually needs to be the expected output, and a noised version of that
+# clean block becomes the input, so we `swap` them after noising.
+Combinator = Callable[[Sequence], Sequence]
+
+
+##########
+# Starting points
+#
+#   These are combinators that ignore the input sequence (IE they should be
+#   used at the start of the chain) and create initial pixels
+
+def gen_some_blocks(colors: List[int], seq_length=48, background_color=0) -> Combinator:
+    """ Generate a sequence of blocks with random colors. """
+    def generator(seq: Sequence) -> Sequence:
+        init = [background_color] * seq_length
+        current_color = background_color
+        is_in_block = False
+        for i in range(seq_length):
+            if not is_in_block and random.random() > 0.5:  # start block
+                is_in_block = True
+                current_color = random.choice(colors)
+            if is_in_block and random.random() > 0.8:  # terminate block
+                is_in_block = False
+            if is_in_block:  # paint block
+                init[i] = current_color
+        return Sequence(init, init, None)
+    return generator
+
+
+def gen_one_block(colors: List[int], seq_length=48, background_color=0) -> Combinator:
+    """ Generate a sequence of a single block with a random color. """
+    def generator(seq: Sequence) -> Sequence:
+        block_size = 5
+        start_ix = random.randint(block_size, seq_length - block_size)
+        end_ix = start_ix + block_size
+        color = random.choice(colors)
+
+        init = [background_color] * seq_length
+        init[start_ix:end_ix] = [color] * block_size
+        return Sequence(init, init, None)
+    return generator
+
+
+def gen_three_blocks(colors: List[int], seq_length=48, background_color=0) -> Combinator:
+    """Generate a sequence with three blocks of sizes 2, 4, and 6."""
+    def generator(seq: Sequence) -> Sequence:
+        init = [background_color] * seq_length
+        block_sizes = [2, 4, 6]
+        random.shuffle(block_sizes)
+
+        available_positions = list(range(seq_length - max(block_sizes)))
+        for size in block_sizes:
+            if not available_positions:
+                break
+            start = random.choice(available_positions)
+            color = random.choice(colors)
+            init[start:start+size] = [color] * size
+
+            # Remove overlapping positions
+            available_positions = [pos for pos in available_positions
+                                   if pos + size <= start or pos >= start + size]
+
+        return Sequence(init, init, None)
+    return generator
+
+def gen_n_blocks(colors: List[int], n: int, seq_length=48, background_color=0, min_size=2) -> Combinator:
+    """Generate a sequence with n blocks of incrementing sizes."""
+    def generator(seq: Sequence) -> Sequence:
+        init = [background_color] * seq_length
+        block_sizes = [min_size + i for i in range(n)]
+        total_block_size = sum(block_sizes)
+
+        if total_block_size > seq_length:
+            raise ValueError("Total block size exceeds sequence length")
+
+        available_positions = list(range(seq_length - total_block_size + 1))
+        block_positions = []
+
+        for size in block_sizes:
+            if not available_positions:
+                break
+            start = random.choice(available_positions)
+            color = random.choice(colors)
+            init[start:start+size] = [color] * size
+            block_positions.append((start, start+size))
+
+            # Remove overlapping positions
+            available_positions = [pos for pos in available_positions
+                                   if pos + size <= start or pos >= start + size]
+
+        return Sequence(init, init, {"block_positions": block_positions})
+    return generator
+
+def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> Combinator:
     """
-    Generate a sequence of random colors and output the same sequence.
+    Generate a sequence with pixels scattered randomly with probability p.
 
     Args:
-    seq_len (int): Length of the sequence to generate.
-    max_digits (int): Number of different colors to use (excluding background).
-    background (int): Background color value.
+    colors (List[int]): List of available colors (excluding background color 0).
+    p (float): Probability of a pixel being a non-background color. Default is 0.2.
+    seq_length (int): Length of the sequence to generate. Default is 48.
 
     Returns:
-    tuple: Two identical lists representing the input and output sequences.
+    Combinator: A function that generates a new Sequence with randomly scattered pixels.
     """
-    # Create a list of colors excluding the background color
-    colors = [i for i in range(1, max_digits + 1) if i != background]
+    def generator(seq: Sequence) -> Sequence:
+        init = [
+            random.choice(colors) if random.random() < p else 0
+            for _ in range(seq_length)
+        ]
+        return Sequence(init, init, None)
+    return generator
 
-    # Generate the sequence
-    sequence = [background] * seq_len
+def gen_random_pixel_block(colors: List[int], seq_length=48, background_color=0, min_block_size=5, max_block_size=10) -> Combinator:
+    """Generate a sequence with a single block of random pixels."""
+    def generator(seq: Sequence) -> Sequence:
+        block_size = random.randint(min_block_size, max_block_size)
+        start_ix = random.randint(0, seq_length - block_size)
+        end_ix = start_ix + block_size
 
-    for i in range(seq_len):
-        if random.random() < 0.5:  # 50% chance to change color
-            sequence[i] = random.choice(colors)
+        init = [background_color] * seq_length
+        block = [random.choice(colors) for _ in range(block_size)]
+        init[start_ix:end_ix] = block
 
-    return sequence, sequence.copy()
+        return Sequence(init, init, {"block_start": start_ix, "block_end": end_ix})
+    return generator
 
 
 ##################################################
-# Identity
+# Combinators
 
-def gen_identity_block(seq_len, min_len=2, max_len=5, max_digits=10, background=0):
-    """
-    Generate a single block for the identity task where input and output are the same
-    """
-    block_len = random.randint(min_len, max_len)
-    block_start = random.randint(0, seq_len - block_len)
-    block_end = block_start + block_len
-
-    block_color = random.randint(1, max_digits)
-    while block_color == background:
-        block_color = random.randint(1, max_digits)
-
-    sequence = [background] * seq_len
-
-    for i in range(block_start, block_end):
-        sequence[i] = block_color
-
-    return sequence, sequence.copy()
+def compose(transformers: List[Combinator]) -> Combinator:
+    """ Compose multiple sequence transformers into a single transformer. """
+    def composed_transformer(seq: Sequence) -> Sequence:
+        for transformer in transformers:
+            seq = transformer(seq)
+        return seq
+    return composed_transformer
 
 
-def divide_into_chunks(n, denom):
-    '''Divide `n` into `denom` number of chunks of integers, such that all chunks
-    sum to `n`. This is useful when you want to divide a sequence into `denom`
-    blocks that are roughly equal size and all add to `n`.'''
-    base_chunk = n // denom
-    remainder = n % denom
-    chunks = [base_chunk] * denom
-    for i in range(remainder):
-        chunks[i] += 1
-    return chunks
+def swap(seq: Sequence) -> Sequence:
+    """ Swap the input and output sequences. """
+    return Sequence(seq.outputs, seq.inputs, seq.metadata)
 
 
-def test_divide_into_chunks():
-    import random
-    for _ in range(100):
-        n = random.randint(1, 1000)
-        denom = random.randint(1, n)
-        chunks = divide_into_chunks(n, denom)
-        assert sum(chunks) == n, f"Sum of chunks {sum(chunks)} does not equal {n}"
-        assert len(chunks) == denom, f"Number of chunks {len(chunks)} does not equal {denom}"
-        assert all(isinstance(chunk, int) for chunk in chunks), "Not all chunks are integers"
-# test_divide_into_chunks()
+def translate(n: int) -> Combinator:
+    """ Translate the sequence by n positions. """
+    def f(seq):
+        outputs = seq.outputs
+        new_outputs = outputs[-n:] + outputs[:-n]
+        return Sequence(seq.inputs, new_outputs, seq.metadata)
+    return f
 
 
-def gen_multi_identity(seq_len, num_blocks=3, min_len=2, max_len=5, max_digits=10, background=0):
-    """
-    Generate multiple identity blocks
-    """
-    seq_lens = divide_into_chunks(seq_len, num_blocks)
-    input_seq = []
-    output_seq = []
-
-    for s in seq_lens:
-        ii, oo = gen_identity_block(s, min_len, max_len, max_digits, background)
-        input_seq += ii
-        output_seq += oo
-
-    return input_seq, output_seq
+def reflect(i_pivot: int) -> Combinator:
+    """ Reflect the sequence about the index i_pivot. """
+    def f(seq):
+        outputs = seq.outputs
+        new_outputs = [outputs[(-(i - i_pivot) + i_pivot) %
+                               len(outputs)] for i in range(len(outputs))]
+        return Sequence(seq.inputs, new_outputs, seq.metadata)
+    return f
 
 
-##################################################
-# Denoising
-
-def gen_single_1c_denoising(seq_len, max_digits, background):
-    """
-    1D same color denoising, single object, noise is outside block
-    """
-    obj_len = randrange(seq_len // 3, seq_len // 2)
-    obj_start = randrange(seq_len - obj_len - 2)
-    obj_end = obj_start + obj_len
-
-    filling_color = randrange(1, max_digits)
-
-    input = [background] * seq_len
-    output = [background] * seq_len
-
-    for i in range(obj_start, obj_end):
-        input[i] = filling_color
-        output[i] = filling_color
-
-    pixel_suffix = 1
-
-    # prepending noise before block
-    pixel_end = 0
-    for i in range(randrange(1, 6)):
-        pixel_len = 1
-        pixel_prefix = randrange(2, 5)
-
-        pixel_start = pixel_end + pixel_prefix
-        pixel_end = pixel_start + pixel_len
-
-        if pixel_end + pixel_suffix > obj_start:
-            break
-
-        for i in range(pixel_start, pixel_end):
-            input[i] = filling_color
-
-    # appending noises after block
-    pixel_end = obj_end
-    for i in range(randrange(1, 6)):
-        pixel_len = 1
-        pixel_prefix = randrange(2, 5)
-
-        pixel_start = pixel_end + pixel_prefix
-        pixel_end = pixel_start + pixel_len
-
-        if pixel_end + pixel_suffix > seq_len:
-            break
-
-        for i in range(pixel_start, pixel_end):
-            input[i] = filling_color
-
-    return input, output
+def colorshift(n: int) -> Combinator:
+    """ Shift the color of each element in the sequence by n. """
+    def f(seq):
+        outputs = seq.outputs
+        new_outputs = [outputs[i] + n if outputs[i] !=
+                       0 else outputs[i] for i in range(len(outputs))]
+        return Sequence(seq.inputs, new_outputs, seq.metadata)
+    return f
 
 
-##################################################
-# Fill
+def shrink(seq: Sequence) -> Sequence:
+    """For each span of consecutive instances of a specific value, map the
+    midpoint of the range to that value and the rest of the range to 0."""
+    outputs = seq.outputs
+    new_outputs = [0] * len(outputs)
+    spans = []
+    current_span = {"start": 0, "val": outputs[0], "len": 1}
 
-def gen_basic_fill(seq_len, min_len=8, max_len=32, min_hole_len=1, max_digits=10, background=0):
-    """
-    Generate a basic fill task: fill a single hole in 1D
-    """
-    seq_len = max(seq_len, min_len)
-    seq_len = min(seq_len, max_len)
-
-    hole_len = randint(min_hole_len, seq_len - 2 - 3)
-    hole_start = randint(0, seq_len - hole_len - 2)
-    hole_end = hole_start + hole_len + 1
-
-    pivot_pt = randint(1, max_digits)
-    filling_color = pivot_pt
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    input_seq[hole_start] = pivot_pt
-    input_seq[hole_end] = pivot_pt
-
-    output_seq[hole_start] = pivot_pt
-    for i in range(hole_start + 1, hole_end):
-        output_seq[i] = filling_color
-    output_seq[hole_end] = pivot_pt
-
-    return input_seq, output_seq
-
-
-def gen_multi_fill(seq_len, min_len=8, max_len=32, min_hole_len=1, max_digits=10, background=0):
-    """
-    3 basic fills of different colors simultaneously
-    """
-    input_seq = []
-    output_seq = []
-    for _ in range(3):
-        ii, oo = gen_basic_fill(seq_len // 3, min_len, max_len, min_hole_len, max_digits, background)
-        input_seq += ii
-        output_seq += oo
-
-    return input_seq, output_seq
-
-
-def gen_hollow(seq_len, min_len=8, max_len=32, min_hole_len=1, max_digits=10, background=0):
-    """
-    Opposite of fill task, 1 block must be hollowed.
-    """
-    output_seq, input_seq = gen_basic_fill(seq_len, min_len, max_len, min_hole_len, max_digits, background)
-    return input_seq, output_seq
-
-
-##################################################
-# Flip
-
-def gen_single_flip(seq_len, min_len=8, max_len=32, max_digits=10, background=0):
-    """
-    A block with an indicator at start that must be flipped to the end.
-    """
-    seq_len = max(seq_len, min_len)
-    seq_len = min(seq_len, max_len)
-
-    obj_len = randint(seq_len // 4, seq_len // 2)
-    obj_start = randint(0, seq_len - obj_len - 1)
-    obj_end = obj_start + obj_len + 1
-
-    pivot_pt = randint(1, max_digits)
-    filling_color = randint(1, max_digits)
-    if filling_color == pivot_pt:
-        filling_color = pivot_pt + 1 if pivot_pt < max_digits else pivot_pt - 1
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    for i in range(obj_start, obj_end):
-        if i == obj_start:
-            input_seq[i] = pivot_pt
+    for i, v in enumerate(outputs[1:], 1):
+        if v == current_span["val"]:
+            current_span["len"] += 1
         else:
-            input_seq[i] = filling_color
+            spans.append(current_span)
+            current_span = {"start": i, "val": v, "len": 1}
+    spans.append(current_span)
 
-        if i == obj_end - 1:
-            output_seq[i] = pivot_pt
+    for span in spans:
+        mid = span["start"] + span["len"] // 2
+        new_outputs[mid % len(outputs)] = span["val"]
+
+    return Sequence(seq.inputs, new_outputs, seq.metadata)
+
+
+def expand(n: int) -> Combinator:
+    """Expand each value in the input sequence to fill each pixel within `n` of it
+    in the output sequence. """
+    def transformer(seq: Sequence) -> Sequence:
+        def mode_non_bg(s: List[int]):
+            counts = [(x, s.count(x)) for x in set(s) if x != 0]
+            counts.sort(key=lambda x_count: x_count[1], reverse=True)
+            return counts[0][0] if counts else 0
+        outputs = seq.outputs
+        new_outputs = [mode_non_bg([outputs[j % len(outputs)] for j in range(i - n, i + n + 1)])
+                       for i in range(len(outputs))]
+        return Sequence(seq.inputs, new_outputs, seq.metadata)
+
+    return transformer
+
+
+def endpoints(seq: Sequence) -> Sequence:
+    ''' Identify the start/end of each block '''
+    outputs = seq.outputs
+    new_outputs = [0] * len(outputs)
+    spans = []
+    current_span = {"start": 0, "val": outputs[0], "len": 1}
+    for i, v in enumerate(outputs[1:]):
+        if v == current_span["val"]:
+            current_span["len"] += 1
         else:
-            output_seq[i] = filling_color
+            spans.append(current_span)
+            current_span = {"start": i + 1, "val": v, "len": 1}
+    spans.append(current_span)
+    for span in spans:
+        end0 = span["start"]
+        new_outputs[end0 % len(outputs)] = span["val"]
+        end1 = span["start"] + span["len"] - 1
+        new_outputs[end1 % len(outputs)] = span["val"]
+    return Sequence(seq.inputs, new_outputs, seq.metadata)
 
-    return input_seq, output_seq
+
+def collect_non_background(seq: List[int]) -> List[int]:
+    """Collect all non-background colors (non-zero integers) from the sequence."""
+    return [color for color in seq if color != 0]
 
 
-##################################################
-# Multicolor denoising
+def right_align(seq: Sequence) -> Sequence:
+    """Right-align all non-background colors in the sequence."""
+    outputs = seq.outputs
+    non_bg_colors = collect_non_background(outputs)
+    aligned_outputs = [0] * (len(outputs) - len(non_bg_colors)) + non_bg_colors
+    return Sequence(seq.inputs, aligned_outputs, seq.metadata)
 
-def gen_single_mc_denoising(seq_len, n_noise_pixels=4, min_len=32, max_len=33, max_digits=10, background=0):
+
+def add_bg_noise(p, colors: List[int], background_color: int = 0) -> Combinator:
+    """Add noise to the background pixels of the output sequence."""
+    def transformer(seq: Sequence) -> Sequence:
+        outputs = seq.outputs
+        new_outputs = [
+            random.choice([0] + [c for c in colors if c != 0]) if pixel == background_color and random.random() < p else pixel
+            for pixel in outputs
+        ]
+        return Sequence(seq.inputs, new_outputs, seq.metadata)
+    return transformer
+
+
+def invert_colors(seq: Sequence) -> Sequence:
+    """Invert the colors in the sequence, swapping background and foreground."""
+    outputs = seq.outputs
+    background_color = 0
+    foreground_color = next(color for color in outputs if color != background_color)
+
+    new_outputs = [foreground_color if pixel == background_color else background_color for pixel in outputs]
+    return Sequence(seq.inputs, new_outputs, seq.metadata)
+
+
+def get_contiguous_blocks(seq: List[int]) -> List[Tuple[int, int, int]]:
     """
-    A single block with noise pixels within it
+    Identify contiguous blocks in the sequence.
+    Returns a list of tuples (start_index, length, color).
     """
-    seq_len = max(seq_len, min_len)
-    seq_len = min(seq_len, max_len)
-
-    obj_len = randint(seq_len - 12, seq_len - 6)
-    obj_start = randint(0, seq_len - obj_len - 2)
-    obj_end = obj_start + obj_len
-
-    filling_color = randint(1, max_digits)
-    noise_colors = list(range(1, max_digits + 1))
-    noise_colors.remove(filling_color)
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    for i in range(obj_start, obj_end):
-        input_seq[i] = filling_color
-        output_seq[i] = filling_color
-
-    for _ in range(randint(1, n_noise_pixels)):
-        noise_color = choice(noise_colors)
-        noise_position = randint(obj_start + 2, obj_end - 3)
-        input_seq[noise_position] = noise_color
-
-    return input_seq, output_seq
-
-
-##################################################
-# Mirror
-
-def gen_single_mirror(seq_len, min_len=12, max_len=32, max_digits=10, background=0, pivot_pt=9):
-    """
-    A block starts left of a "mirror" pixel, and must be reflected across it
-    """
-    seq_len = max(seq_len, min_len)
-    seq_len = min(seq_len, max_len)
-
-    obj_len = randint(seq_len // 4, seq_len // 3)
-    obj_to_pivot = randint(1, max(2, ((seq_len - obj_len * 2 - 3) // 2)))
-
-    obj1_start = randint(0, seq_len - obj_len * 2 - obj_to_pivot * 2 - 1)
-    obj1_end = obj1_start + obj_len
-
-    obj2_start = obj1_end + obj_to_pivot * 2 + 1
-    obj2_end = obj2_start + obj_len
-
-    filling_color = randint(1, max_digits)
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    for i in range(obj1_start, obj1_end):
-        input_seq[i] = filling_color
-
-    for i in range(obj2_start, obj2_end):
-        output_seq[i] = filling_color
-
-    pivot_position = obj1_end + obj_to_pivot
-    input_seq[pivot_position] = pivot_pt
-    output_seq[pivot_position] = pivot_pt
-
-    return input_seq, output_seq
-
-
-##################################################
-# Movement
-
-def gen_move_single_bar(seq_len, min_len=8, max_len=32, move_len=3, min_bar_len=3, max_digits=10, background=0):
-    """
-    Move a single bar rightward for a fixed move_len
-    """
-    seq_len = max(seq_len, min_len)
-    seq_len = min(seq_len, max_len)
-
-    bar_len = randint(min_bar_len, seq_len - move_len)
-    bar_start = randint(0, seq_len - bar_len - move_len)
-
-    filling_color = randint(1, max_digits)
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    for i in range(bar_start, bar_start + bar_len):
-        input_seq[i] = filling_color
-
-    for j in range(bar_start + move_len, bar_start + bar_len + move_len):
-        output_seq[j] = filling_color
-
-    return input_seq, output_seq
-
-
-def gen_move_to_pixel(seq_len, min_len=8, max_len=32, min_bar_len=3, max_digits=10, background=0):
-    """
-    Move a single bar rightward to touch a dynamically located indicator
-    """
-    seq_len = max(seq_len, min_len)
-    seq_len = min(seq_len, max_len)
-
-    bar_len = randint(min_bar_len, seq_len // 2)
-    bar_start = randint(0, seq_len - bar_len - 3)
-    bar_end = bar_start + bar_len
-
-    filling_color = randint(1, max_digits)
-    pivot_color = choice([c for c in range(1, max_digits + 1) if c != filling_color])
-
-    pivot_pos = randint(bar_end + 2, seq_len - 1)
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    for i in range(bar_start, bar_end):
-        input_seq[i] = filling_color
-
-    input_seq[pivot_pos] = pivot_color
-    output_seq[pivot_pos] = pivot_color
-
-    for i in range(pivot_pos - bar_len, pivot_pos):
-        output_seq[i] = filling_color
-
-    return input_seq, output_seq
-
-
-def gen_move_towards_indicator(seq_len, min_len=8, max_len=32, max_move=2, min_bar_len=3, max_digits=10, background=0):
-    """
-    Move a block towards an indicator by up to 2 positions, possibly covering the indicator.
-    """
-    seq_len = max(seq_len, min_len)
-    seq_len = min(seq_len, max_len)
-
-    # Generate the block
-    bar_len = randint(min_bar_len, seq_len // 3)
-    bar_start = randint(0, seq_len - bar_len - 3)
-    bar_end = bar_start + bar_len
-
-    # Generate the indicator
-    indicator_pos = randint(bar_end + 2, seq_len - 1)
-
-    # Choose colors
-    block_color = randint(1, max_digits)
-    indicator_color = choice([c for c in range(1, max_digits + 1) if c != block_color])
-
-    # Create input sequence
-    input_seq = [background] * seq_len
-    for i in range(bar_start, bar_end):
-        input_seq[i] = block_color
-    input_seq[indicator_pos] = indicator_color
-
-    # Create output sequence
-    output_seq = input_seq.copy()
-
-    # Calculate move distance
-    distance = indicator_pos - bar_end
-    move_distance = min(distance, max_move)
-
-    # Move the block
-    for i in range(bar_start, bar_end):
-        output_seq[i] = background
-    for i in range(bar_start + move_distance, bar_end + move_distance):
-        output_seq[i] = block_color
-
-    return input_seq, output_seq
-
-
-def gen_extend_to_pixel(seq_len, min_len=8, max_len=32, min_bar_len=3, max_digits=10, background=0):
-    """
-    Extend a block all the way rightward to a dynamically located pixel.
-    """
-    seq_len = max(seq_len, min_len)
-    seq_len = min(seq_len, max_len)
-
-    bar_len = randint(min_bar_len, seq_len // 2)
-    bar_start = randint(0, seq_len - bar_len - 3)
-    bar_end = bar_start + bar_len
-
-    filling_color = randint(1, max_digits)
-    pivot_color = choice([c for c in range(1, max_digits + 1) if c != filling_color])
-
-    pivot_pos = randint(bar_end + 2, seq_len - 1)
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    for i in range(bar_start, bar_end):
-        input_seq[i] = filling_color
-
-    input_seq[pivot_pos] = pivot_color
-    output_seq[pivot_pos] = pivot_color
-
-    for i in range(bar_start, pivot_pos):
-        output_seq[i] = filling_color
-
-    return input_seq, output_seq
-
-
-##################################################
-# Copy pattern
-
-def gen_grow(seq_len, min_len=32, max_len=33, max_digits=10, background=0):
-    """
-    Generate randomly spaced seed pixels and grow each to 3 pixels of the same color,
-    ensuring a minimum spacing of 5 between seeds
-    """
-    seq_len = max(min(seq_len, max_len), min_len)
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    seed_positions = []
-    possible_positions = list(range(1, seq_len - 1))
-
-    while possible_positions:
-        pos = choice(possible_positions)
-        if all(abs(pos - existing_pos) >= 5 for existing_pos in seed_positions):
-            seed_positions.append(pos)
-            filling_color = random.randint(1, max_digits)
-            input_seq[pos] = filling_color
-            for j in range(3):
-                output_seq[pos + j - 1] = filling_color
-
-            # rm if too close to the seed
-            possible_positions = [p for p in possible_positions if abs(p - pos) >= 5]
-        else:
-            possible_positions.remove(pos)
-
-    return input_seq, output_seq
-
-
-def gen_grow_copy_color(seq_len, min_len=32, max_len=33, max_digits=10, background=0):
-    """
-    Generate randomly spaced seed pixels, copy each pixel 3 times, and recolor to the color of the leftmost bar
-    """
-    seq_len = max(min(seq_len, max_len), min_len)
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    filling_color = random.randint(1, max_digits)
-    init_color = choice([c for c in range(1, max_digits + 1) if c != filling_color and c != background])
-
-    # Color indicator bar
-    offset = randint(1, 2)
-    for j in range(offset, 3 + offset):
-        input_seq[j] = filling_color
-        output_seq[j] = filling_color
-
-    seed_positions = []
-    possible_positions = list(range(4 + offset, seq_len - 1))
-
-    while possible_positions:
-        pos = choice(possible_positions)
-        if all(abs(pos - existing_pos) >= 5 for existing_pos in seed_positions):
-            seed_positions.append(pos)
-            input_seq[pos] = init_color
-            for j in range(3):
-                output_seq[pos + j - 1] = filling_color
-
-            # rm if too close to this seed
-            possible_positions = [p for p in possible_positions if abs(p - pos) >= 5]
-        else:
-            possible_positions.remove(pos)
-
-    return input_seq, output_seq
-
-
-##################################################
-# Recolor
-
-def gen_recolor_odd_even(seq_len, recolor_map, min_len=12, max_len=33, max_digits=10, background=0):
-    """
-    Generate a 1D recolor task based on odd-even object size
-    :param recolor_map: Dictionary with 'odd' and 'even' keys specifying recoloring
-
-    """
-    seq_len = max(min(seq_len, max_len), min_len)
-
-    ori_color = random.randint(1, max_digits)
-    while ori_color == background or ori_color in recolor_map.values():
-        ori_color = random.randint(1, max_digits)
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
+    blocks = []
     start = 0
-    has_odd, has_even = 0, 0
-
-    while start < seq_len:
-        bwt_space = random.randint(1, 3)
-        start += bwt_space
-        bar_len = random.randint(1, 5)
-
-        if has_odd == 0 and bar_len % 2 == 0:
-            bar_len += 1
-            has_odd += 1
-        elif has_even == 0 and bar_len % 2 == 1:
-            bar_len += 1
-            has_even += 1
-
-        if start + bar_len > seq_len:
-            break
-
-        for j in range(bar_len):
-            input_seq[start + j] = ori_color
-            output_seq[start + j] = recolor_map['even'] if bar_len % 2 == 0 else recolor_map['odd']
-
-        start += bar_len
-
-    return input_seq, output_seq
+    for i in range(1, len(seq) + 1):
+        if i == len(seq) or seq[i] != seq[start]:
+            blocks.append((start, i - start, seq[start]))
+            start = i
+    return blocks
 
 
-def gen_recolor_size_cnt(seq_len, recolor_map, min_len=12, max_len=33, max_digits=10, background=0):
+def remove_blocks(seq: Sequence, condition: Callable[[List[Tuple[int, int, int]]], List[Tuple[int, int, int]]]) -> Sequence:
     """
-    Generate a 1D recolor task based on object size
-    :param recolor_map: Dictionary mapping {length : color}
+    Remove blocks from the sequence based on the given condition.
     """
-    seq_len = max(min(seq_len, max_len), min_len)
-
-    ori_color = randint(1, max_digits)
-    while ori_color == background or ori_color in recolor_map.values():
-        ori_color = randint(1, max_digits)
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    start = 0
-    bar_lens = [1, 2, 3]
-
-    while start < seq_len:
-        bwt_space = randint(1, 3)
-        start += bwt_space
-
-        if bar_lens:
-            bar_len = choice(bar_lens)
-            bar_lens.remove(bar_len)
-        else:
-            bar_len = randint(1, 3)
-
-        if start + bar_len > seq_len:
-            break
-
-        for j in range(bar_len):
-            input_seq[start + j] = ori_color
-            output_seq[start + j] = recolor_map[bar_len]
-
-        start += bar_len
-
-    return input_seq, output_seq
-
-
-def gen_recolor_max(seq_len, max_color, min_len=17, max_len=33, max_digits=10, background=0):
-    """
-    Generate a 1D recolor task based on maximum object size
-    """
-    seq_len = max(seq_len, min_len)
-    seq_len = min(seq_len, max_len)
-
-    ori_color = choice(list(set(range(1, max_digits)) - {max_color}))
-
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    max_lens = [4, 5, 7]
-    shuffle(max_lens)
-    max_bar_len = choice(max_lens)
-
-    space_l = []
-    bar_l = []
-
-    # Insert the max bar
-    bwt_space = randint(1, 3)
-    space_l.append(bwt_space)
-    bar_l.append(max_bar_len)
-
-    start = bwt_space + max_bar_len
-    while start < seq_len:
-        bwt_space = randint(1, 3)
-        bar_len = randint(1, max_bar_len)
-
-        if start + bwt_space + bar_len > seq_len:
-            break
-
-        space_l.append(bwt_space)
-        bar_l.append(bar_len)
-        start += bwt_space + bar_len
-
-    order_l = list(range(len(bar_l)))
-    shuffle(order_l)
-
-    start = 0
-    for i in order_l:
-        bwt_space = space_l[i]
-        bar_len = bar_l[i]
-        start += bwt_space
-
-        if start + bar_len > seq_len:
-            break
-
-        for j in range(bar_len):
-            input_seq[start + j] = ori_color
-            if bar_len == max_bar_len:
-                output_seq[start + j] = max_color
-            else:
-                output_seq[start + j] = ori_color
-
-        start += bar_len
-
-    return input_seq, output_seq
-
-
-##################################################
-# Sort
-
-def gen_scattered_pixels_sorted(seq_len, num_pixels, min_len=32, max_len=33, max_digits=10, background=0):
-    """
-    A list of pixel locations, the output locations are identical but the colors are sorted.
-    """
-    seq_len = max(min(seq_len, max_len), min_len)
-
-    # empty sequences
-    input_seq = [background] * seq_len
-    output_seq = [background] * seq_len
-
-    # pixel positions
-    positions = sorted(sample(range(seq_len), num_pixels))
-
-    # unique colors
-    colors = sample(range(1, max_digits + 1), num_pixels)
-    sorted_colors = sorted(colors)
-
-    for pos, c, sc in zip(positions, colors, sorted_colors):
-        input_seq[pos] = c
-        output_seq[pos] = sc
-
-    return input_seq, output_seq
-
-
-##################################################
-# Stack
-
-def gen_stack(seq_len, max_pixels, min_len=32, max_len=33, max_digits=10, background=0):
-    """
-    A 1D task with scattered pixels in the input, and stack them to the right in the output.
-
-    :param seq_len: Length of the sequence
-    :param num_pixels: Number of colored pixels to include
-    :param min_len: Minimum sequence length
-    :param max_len: Maximum sequence length
-    :param max_digits: Maximum number of colors (excluding background)
-    :param background: Background color index
-    :return: Tuple of input and output sequences
-    """
-    seq_len = max(min(seq_len, max_len), min_len)
-
-    num_pixels = randint(2, max_pixels)
-    input_seq = [background] * seq_len
-
-    # unique positions per pixel
-    positions = sorted(sample(range(seq_len), num_pixels))
-
-    # unique colors per pixels
-    colors = sample(range(1, max_digits + 1), num_pixels)
-
-    # input
-    for pos, color in zip(positions, colors):
-        input_seq[pos] = color
-
-    # output (inputs stacked to the right)
-    output_seq = [background] * seq_len
-    for i, color in enumerate(colors):
-        output_seq[seq_len - num_pixels + i] = color
-
-    return input_seq, output_seq
-
-
-##################################################
-# Overlap
-
-def gen_overlap_spread(seq_len, max_blocks=3, block_len=5, min_len=32, max_len=33, max_digits=10, background=0):
-    """Generate a 1D task with overlapping blocks in the input, and disambiguate
-    them in the output. A starter block will be on top of the stack, and then
-    more blocks can be underneath it to the left or right. All block's indices
-    are referenced from the left edge of the block.
-
-    :param seq_len: Length of the sequence
-    :param num_blocks: Number of blocks to generate (2 or 3)
-    :param block_len: Length of each block
-    :param min_len: Minimum sequence length
-    :param max_len: Maximum sequence length
-    :param max_digits: Maximum number of colors (excluding background)
-    :param background: Background color index
-    :return: Tuple of input and output sequences
-    """
-    seq_len = max(min(seq_len, max_len), min_len)
-    num_blocks = min(max(max_blocks, 2), max_blocks)
-
-    # Generate block colors
-    colors = sample(range(1, max_digits + 1), num_blocks)
-
-    # starter (topmost) block must be central so that submerged blocks are within seq bounds
-    starter_pos = randint(block_len * num_blocks, seq_len - block_len * num_blocks)
-
-    left_blocks = []
-    left_bound = starter_pos - block_len
-
-    right_blocks = []
-    right_bound = starter_pos + block_len
-
-    # submerged blocks
-    for i in range(1, num_blocks):
-        if choice([True, False]):  # go left
-            pos = randint(left_bound + 1, left_bound + block_len - 1)
-            left_blocks.append((pos, colors[i]))
-            left_bound = pos - block_len
-        else:  # go right
-            pos = randint(right_bound - block_len + 1, right_bound - 1)
-            right_blocks.append((pos, colors[i]))
-            right_bound = pos + block_len
-
-    ##########
-    # Inputs
-
-    input_seq = [background] * seq_len
-
-    # left blocks
-    for pos, color in reversed(left_blocks):  # reversed to appear below
-        for i in range(block_len):
-            input_seq[pos + i] = color
-
-    # right blocks
-    for pos, color in reversed(right_blocks):  # reversed to appear below
-        for i in range(block_len):
-            input_seq[pos + i] = color
-
-    # starter block (on top)
-    for i in range(block_len):
-        input_seq[starter_pos + i] = colors[0]
-
-    ##########
-    # Outputs
-
-    output_seq = [background] * seq_len
-
-    # starter/top block
-    for i in range(starter_pos, starter_pos + block_len):
-        output_seq[i] = colors[0]
-
-    # left blocks
-    for l, (_, c) in enumerate(left_blocks):
-        for i in range(starter_pos - (l + 1) * block_len, starter_pos - l * block_len):
-            output_seq[i] = c
-
-    # left blocks
-    for r, (_, c) in enumerate(right_blocks):
-        for i in range(starter_pos + (r + 1) * block_len, starter_pos + (r + 2) * block_len):
-            output_seq[i] = c
-
-    return input_seq, output_seq
-
-
-##################################################
-# Random Rotation
-
-def gen_color_rotation(seq_len, max_rotation=1, min_len=8, max_len=32, max_digits=10, background=0):
-    """
-    A sequence of colors where the list will be rotated by a random amount.
-
-    Args:
-    seq_len (int): Length of the sequence to generate.
-    min_len (int): Minimum length of the color sequence.
-    max_len (int): Maximum length of the color sequence.
-    max_digits (int): Maximum number of different colors to use.
-    background (int): Background color value.
-    """
-    # Determine the length of the color sequence
-    color_seq_len = random.randint(min_len, min(max_len, seq_len))
-
-    # a list of random colors
-    colors = random.choices(range(1, max_digits + 1), k=color_seq_len)
-
-    # input
-    input_seq = [background] * seq_len
-    start_pos = random.randint(0, seq_len - color_seq_len)
-    input_seq[start_pos:start_pos + color_seq_len] = colors
-
-    # output, rotate the sequence
-    rotation = random.randint(1, max_rotation)
-    output_seq = input_seq.copy()
-    rotated_colors = colors[rotation:] + colors[:rotation]
-    output_seq[start_pos:start_pos + color_seq_len] = rotated_colors
-
-    return input_seq, output_seq
-
-
-##################################################
-# Magnets
-
-def gen_magnets(seq_len, min_block_size=2, max_block_size=5, max_digits=10, background=0):
-    """
-    Generate two blocks of different sizes separated by at least one space.
-    The smaller block moves one step towards the larger block in the output.
-
-    Args:
-    seq_len (int): Length of the sequence to generate.
-    min_block_size (int): Minimum size of a block.
-    max_block_size (int): Maximum size of a block.
-    max_digits (int): Maximum number for color representation.
-    background (int): Background color value.
-
-    Returns:
-    tuple: Two lists representing the input sequence and the output sequence with the smaller block moved.
-    """
-    # Ensure the sequence is long enough to accommodate two blocks and a space
-    if seq_len < 2 * min_block_size + 1:
-        raise ValueError("Sequence length is too short to accommodate two blocks and a space")
-
-    # two blocks of different sizes
-    block1_size = random.randint(min_block_size, max_block_size)
-    block2_size = random.randint(min_block_size, max_block_size)
-    while block2_size == block1_size:
-        block2_size = random.randint(min_block_size, max_block_size)
-
-    color1 = random.randint(1, max_digits)
-    color2 = random.randint(1, max_digits)
-    while color2 == color1:
-        color2 = random.randint(1, max_digits)
-
-    # maximum possible space between blocks
-    max_space = seq_len - block1_size - block2_size
-
-    # Ensure there's at least one space between blocks
-    space = random.randint(1, max(1, max_space))
-
-    # Create the input sequence
-    input_seq = [background] * seq_len
-    start1 = random.randint(0, seq_len - block1_size - space - block2_size)
-    start2 = start1 + block1_size + space
-
-    for i in range(start1, start1 + block1_size):
-        input_seq[i] = color1
-    for i in range(start2, start2 + block2_size):
-        input_seq[i] = color2
-
-    # Create the output sequence
-    output_seq = input_seq.copy()
-
-    # Move the smaller block towards the larger block
-    if block1_size < block2_size:
-        # Move block1 right
-        for i in range(start1 + block1_size, start1, -1):
-            output_seq[i] = output_seq[i-1]
-        output_seq[start1] = background
+    outputs = seq.outputs
+    blocks = get_contiguous_blocks(outputs)
+    blocks_to_remove = condition(blocks)
+
+    new_outputs = outputs.copy()
+    for start, length, _ in blocks_to_remove:
+        new_outputs[start:start+length] = [0] * length
+
+    return Sequence(seq.inputs, new_outputs, seq.metadata)
+
+
+def remove_longest_blocks(seq: Sequence) -> Sequence:
+    """Remove the longest contiguous blocks from the sequence."""
+    def condition(blocks):
+        max_length = max(block[1] for block in blocks if block[2] != 0)  # Exclude background blocks
+        return [block for block in blocks if block[1] == max_length and block[2] != 0]
+    return remove_blocks(seq, condition)
+
+
+def remove_shortest_blocks(seq: Sequence) -> Sequence:
+    """Remove the shortest contiguous blocks from the sequence."""
+    def condition(blocks):
+        non_bg_blocks = [block for block in blocks if block[2] != 0]
+        if not non_bg_blocks:
+            return []
+        min_length = min(block[1] for block in non_bg_blocks)
+        return [block for block in non_bg_blocks if block[1] == min_length]
+    return remove_blocks(seq, condition)
+
+
+def add_pivot(seq: Sequence) -> Sequence:
+    """Add a pivot pixel (color 5) at a random position and store its index in metadata. Add to both inputs and outputs."""
+    background_color = 0
+    pivot_color = 5
+    inputs = seq.inputs
+    outputs = seq.outputs
+    bg_ixs = [i for i in range(len(outputs)) if outputs[i] == background_color]
+    pivot_index = random.choice(bg_ixs)
+    inputs[pivot_index] = pivot_color
+    new_outputs = outputs.copy()
+    new_outputs[pivot_index] = pivot_color
+    return Sequence(inputs, new_outputs, {"pivot_index": pivot_index})
+
+
+def reflect_around_pivot(seq: Sequence) -> Sequence:
+    """Reflect the sequence around the pivot point stored in metadata."""
+    outputs = seq.outputs
+    i_pivot = seq.metadata["pivot_index"]
+    new_outputs = [outputs[(-(i - i_pivot) + i_pivot) % len(outputs)] for i in range(len(outputs))]
+    return Sequence(seq.inputs, new_outputs, seq.metadata)
+
+
+def repaint_max_block(seq: Sequence) -> Sequence:
+    """Find the largest block and repaint all non-background pixels to that color."""
+    outputs = seq.outputs
+    blocks = get_contiguous_blocks(outputs)
+    non_bg_blocks = [block for block in blocks if block[2] != 0]
+
+    if not non_bg_blocks:
+        return seq  # No non-background blocks found
+
+    max_block = max(non_bg_blocks, key=lambda x: x[1])
+    max_color = max_block[2]
+
+    new_outputs = [max_color if pixel != 0 else pixel for pixel in outputs]
+    return Sequence(seq.inputs, new_outputs, seq.metadata)
+
+
+def move_to_pivot(seq: Sequence, background_color=0) -> Sequence:
+    """Move a single block input until it touches the pivot."""
+    outputs = seq.outputs
+    pivot_index = seq.metadata["pivot_index"]
+    pivot_color = outputs[pivot_index]
+
+    # find the block
+    block_start = next(i for i, color in enumerate(outputs) if color != background_color and color != pivot_color)
+    block_color = outputs[block_start]
+    block_end = next(i for i in range(block_start + 1, len(outputs)) if outputs[i] != block_color)
+    block_length = block_end - block_start
+
+    # new outputs
+    new_outputs = outputs.copy()
+    new_outputs[block_start:block_end] = [background_color] * block_length  # erase original block
+
+    if block_start < pivot_index:  # is left?
+        new_outputs[pivot_index - block_length: pivot_index] = [block_color] * block_length  # move right
     else:
-        # Move block2 left
-        for i in range(start2 - 1, start2 + block2_size - 1):
-            output_seq[i] = output_seq[i+1]
-        output_seq[start2 + block2_size - 1] = background
-
-    return input_seq, output_seq
+        new_outputs[pivot_index + 1 : pivot_index + 1 + block_length] = [block_color] * block_length  # move left
+    return Sequence(seq.inputs, new_outputs, seq.metadata)
 
 
-##################################################
-# Helpers
+def extend_to_pivot(seq: Sequence) -> Sequence:
+    """Extend a single block input until it touches the pivot."""
+    outputs = seq.outputs
+    pivot_index = seq.metadata["pivot_index"]
+    pivot_color = outputs[pivot_index]
+
+    # find the block
+    block_start = next(i for i, color in enumerate(outputs) if color != 0 and color != pivot_color)
+    block_end = next(i for i in range(block_start + 1, len(outputs)) if outputs[i] != outputs[block_start])
+    block_color = outputs[block_start]
+
+    # determine new block boundaries
+    if block_start < pivot_index:
+        new_start = block_start
+        new_end = pivot_index
+    else:
+        new_start = pivot_index + 1
+        new_end = block_end
+
+    # extend the block
+    new_outputs = outputs.copy()
+    new_outputs[new_start:new_end] = [block_color] * (new_end - new_start)
+
+    return Sequence(seq.inputs, new_outputs, seq.metadata)
 
 
-def generate_datasets(num_samples: int, seq_len: int, generators: Dict[str, Callable]) -> Dict[str, TensorDataset]:
-    datasets = {}
-    for dataset_name, generator in generators.items():
-        inputs, outputs = [], []
-        for _ in range(num_samples):
-            input_seq, output_seq = generator(seq_len)
-            inputs.append(input_seq)
-            outputs.append(output_seq)
-
-        inputs_tensor = torch.tensor(inputs)
-        outputs_tensor = torch.tensor(outputs)
-        datasets[dataset_name] = TensorDataset(inputs_tensor, outputs_tensor)
-
-    return datasets
+def rotate_block_pixels(n: int) -> Combinator:
+    """Rotate the pixels within the block by n positions. Depends on metadata from `gen_random_pixel_block`."""
+    def transformer(seq: Sequence) -> Sequence:
+        outputs = seq.outputs.copy()
+        start = seq.metadata["block_start"]
+        end = seq.metadata["block_end"]
+        block = outputs[start:end]
+        rotated_block = block[-n:] + block[:-n]
+        outputs[start:end] = rotated_block
+        return Sequence(seq.inputs, outputs, seq.metadata)
+    return transformer
 
 
+def sort_pixels() -> Combinator:
+    """Sort the colors of non-background pixels while maintaining their positions."""
+    def transformer(seq: Sequence) -> Sequence:
+        inputs = seq.inputs
+        non_bg_pixels = [(i, color) for i, color in enumerate(inputs) if color != 0]
+        sorted_colors = sorted([color for _, color in non_bg_pixels])
 
-##################################################
-# Example usage
+        outputs = inputs.copy()
+        for (i, _), color in zip(non_bg_pixels, sorted_colors):
+            outputs[i] = color
 
-if True:
+        return Sequence(inputs, outputs, seq.metadata)
+    return transformer
 
-    seq_len = 32
-    max_digits = 10
-    num_samples = 20
 
-    recolor_odd_even_map = {'odd': 1, 'even': 2}
-    recolor_size_map = {x: x for x in range(max_digits)}
+def magnets(move_distance: int = 2) -> Combinator:
+    """Move the smaller block towards the larger block."""
+    def transformer(seq: Sequence) -> Sequence:
+        inputs = seq.inputs
+        outputs = inputs.copy()
+        block_positions = seq.metadata["block_positions"]
 
-    generators = {
-        "Random Identity": lambda s: gen_random_identity(seq_len, max_digits=10, background=0),
-        "Identity": lambda s: gen_identity_block(s, min_len=2, max_len=5, max_digits=10, background=0),
-        "Identity Multi": lambda s: gen_multi_identity(s, num_blocks=3, min_len=2, max_len=5, max_digits=10, background=0),
-        "Single Color Denoising": lambda s: gen_single_1c_denoising(s, max_digits=10, background=0),
-        "Multi-Color Denoising": lambda s: gen_single_mc_denoising(s, min_len=32, max_len=33, max_digits=10, background=0),
-        "Basic Fill": lambda s: gen_basic_fill(s, min_len=8, max_len=32, min_hole_len=1, max_digits=10, background=0),
-        "Multi Fill": lambda s: gen_multi_fill(s, min_len=8, max_len=32, min_hole_len=1, max_digits=10, background=0),
-        "Hollow": lambda s: gen_hollow(s, min_len=8, max_len=32, min_hole_len=1, max_digits=10, background=0),
-        "Single Flip": lambda s: gen_single_flip(s, min_len=8, max_len=32, max_digits=10, background=0),
-        "Mirror": lambda s: gen_single_mirror(s, min_len=12, max_len=32, max_digits=10, background=0, pivot_pt=9),
-        "Move Single Bar": lambda s: gen_move_single_bar(s, min_len=8, max_len=32, move_len=3, min_bar_len=3, max_digits=10, background=0),
-        "Move to Pixel": lambda s: gen_move_to_pixel(s, min_len=8, max_len=32, min_bar_len=3, max_digits=10, background=0),
-        "Move Towards Indicator": lambda s: gen_move_towards_indicator(s, min_len=8, max_len=32, max_move=2, min_bar_len=3, max_digits=10, background=0),
-        "Extend to Pixel": lambda s: gen_extend_to_pixel(s, min_len=8, max_len=32, min_bar_len=3, max_digits=10, background=0),
-        "Pattern Copy (Single Color)": lambda s: gen_grow_copy_color(s, min_len=32, max_len=33, max_digits=10, background=0),
-        "Pattern Copy (Multi-Color)": lambda s: gen_grow(s, min_len=32, max_len=33, max_digits=10, background=0),
-        "Recolor Odd-Even": lambda s: gen_recolor_odd_even(s, recolor_odd_even_map, min_len=12, max_len=33, max_digits=10, background=0),
-        "Recolor by Size Count": lambda s: gen_recolor_size_cnt(s, recolor_size_map, min_len=12, max_len=33, max_digits=10, background=0),
-        "Recolor by Max": lambda s: gen_recolor_max(s, max_color=1, min_len=17, max_len=33, max_digits=10, background=0),
+        if len(block_positions) < 2:
+            return seq  # Not enough blocks to perform the operation
 
-        "Sort Colors": lambda s: gen_scattered_pixels_sorted(s, num_pixels=3, min_len=32, max_len=33, max_digits=3, background=0),
-        "Stack Pixels": lambda s: gen_stack(s, max_pixels=5, min_len=32, max_len=33, max_digits=10, background=0),
-        "Overlap Spread": lambda s: gen_overlap_spread(s, max_blocks=3, block_len=5, min_len=32, max_len=33, max_digits=10, background=0),
-        "Color Rotation": lambda s: gen_color_rotation(s, min_len=8, max_len=32, max_digits=10, background=0),
-        "Magnets": lambda s: gen_magnets(s, min_block_size=2, max_block_size=5, max_digits=10, background=0),
-    }
+        # Find the largest and smallest blocks
+        largest_block = max(block_positions, key=lambda x: x[1] - x[0])
+        smallest_block = min(block_positions, key=lambda x: x[1] - x[0])
 
-    datasets = generate_datasets(num_samples, seq_len, generators)
+        # Determine direction to move
+        direction = 1 if largest_block[0] > smallest_block[0] else -1
 
-    visualize_datasets(datasets, grid_width=4, grid_height=7, num_samples=10)
+        # Move the smaller block
+        small_start, small_end = smallest_block
+        new_start = small_start + direction * move_distance
+        new_end = small_end + direction * move_distance
+
+        # Ensure the new position is within bounds
+        if 0 <= new_start < len(outputs) and 0 <= new_end <= len(outputs):
+            block_color = outputs[small_start]
+            outputs[small_start:small_end] = [0] * (small_end - small_start)  # Clear old position
+            outputs[new_start:new_end] = [block_color] * (new_end - new_start)  # Set new position
+
+        return Sequence(inputs, outputs, seq.metadata)
+    return transformer
+
+
+##########
+# Demo
+
+random.seed(42)
+
+colors = [1, 2, 3, 4, 6, 7, 8, 9]
+
+puzzles = [
+    ('translate(4)', compose([gen_some_blocks(colors), translate(4)])),
+    ('reflect(seq_len//2)', compose([gen_one_block(colors), reflect(24)])),
+    ('colorshift(2)', compose([gen_some_blocks(colors), colorshift(2)])),
+    ('translate(4) + reflect(seq_len//2)', compose([gen_some_blocks(colors), translate(4), reflect(24)])),
+    ('translate(4) + colorshift(2)', compose([gen_some_blocks(colors), translate(4), colorshift(2)])),
+    ('expand(1)', compose([gen_some_blocks(colors), expand(1)])),
+    ('expand(1) expand(1)', compose([gen_some_blocks(colors), expand(1), expand(1)])),
+    ('expand(1) + colorshift(2)', compose([gen_some_blocks(colors), expand(1), colorshift(2)])),
+    ('expand(1) + translate(1)', compose([gen_some_blocks(colors), expand(1), translate(1)])),
+    ('shrink', compose([gen_some_blocks(colors), shrink])),
+    ('shrink + expand(2)', compose([gen_some_blocks(colors), shrink, expand(2)])),
+    ('endpoints', compose([gen_some_blocks(colors), endpoints])),
+    ('infill', compose([gen_some_blocks(colors), endpoints, swap])),
+    ('expand(1) + endpoints', compose([gen_one_block(colors), expand(1), endpoints])),
+    ('endpoints + expand(1)', compose([gen_one_block(colors), endpoints, expand(1)])),
+    ('endpoints + expand(4) + endpoints + expand(1)', compose([gen_one_block(colors), endpoints, expand(4), endpoints, expand(1)])),
+    ('right_align', compose([gen_some_pixels(colors), right_align])),
+    ('denoise', compose([gen_one_block(colors), swap, add_bg_noise(0.3, colors), swap])),
+    ('invert_colors', compose([gen_one_block(colors), invert_colors])),
+    ('remove_longest_blocks', compose([gen_some_blocks(colors), remove_longest_blocks])),
+    ('remove_shortest_blocks', compose([gen_some_blocks(colors), remove_shortest_blocks])),
+    ('remove_longest + endpoints', compose([gen_some_blocks(colors), remove_longest_blocks, endpoints])),
+    ('reflect-pivot', compose([gen_some_blocks(list(set(colors) - {5})), add_pivot, reflect_around_pivot])),
+    ('reflect-pivot + shrink', compose([gen_one_block(list(set(colors) - {5})), add_pivot, reflect_around_pivot, shrink])),
+    ('repaint-from-max-block', compose([gen_three_blocks(colors), repaint_max_block])),
+    ('move_to_pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, move_to_pivot])),
+    ('extend_to_pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, extend_to_pivot])),
+    ('rotate colored block', compose([gen_random_pixel_block(colors), rotate_block_pixels(1)])),
+    ('sort_pixels', compose([gen_some_pixels(colors[:3], p=0.1), sort_pixels()])),
+    ('magnets', compose([gen_n_blocks(colors, 2), magnets()])),
+]
+
+datasets = {}
+num_samples = 10
+grid_width = 7
+grid_height = 5
+for (name, transformer) in puzzles:
+    all_inputs, all_outputs = [], []
+    for _ in range(num_samples):
+        seq = Sequence([], [], None)
+        seq = transformer(seq)
+        all_inputs.append(seq.inputs)
+        all_outputs.append(seq.outputs)
+        inputs_tensor, outputs_tensor = torch.tensor(all_inputs), torch.tensor(all_outputs)
+        datasets[name] = TensorDataset(inputs_tensor, outputs_tensor)
+
+visualize_datasets(datasets, grid_width=grid_width, grid_height=grid_height, num_samples=num_samples)
