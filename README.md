@@ -58,10 +58,19 @@ def translate(n: int) -> Combinator:
     return f
 ```
 
-Everything's currently in [`./puzzles.py`](./puzzles.py), run the demo:
+Everything's currently in [`puzzles.py`](./arc_like/puzzles.py), no dependencies!:
 
 ```sh
-python puzzles.py
+git clone https://github.com/neurallambda/arc-like
+cd arc-like
+
+# Run the demo (demo only depends on `torch` and `matplotlib`)
+python arc_like/puzzles.py
+
+# Use in your code
+cd your_code
+pip install -e path-to/arc-like
+import arc_like.puzzles as puzzles
 ```
 
 Please add a puzzle as a PR, or, just tell me what you want on [X](https://x.com/neurallambda/)!

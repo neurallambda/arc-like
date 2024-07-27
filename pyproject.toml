@@ -1,0 +1,18 @@
+[project]
+name = "arc-like"
+version = "0.0.0"
+description = "Visual Reasoning Puzzles"
+readme = "README.md"
+authors = [{ name = "neurallambda"}]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent"
+]
+requires-python = ">=3.7"
+
+dependencies = [
+]
+
+[project.urls]
+"Homepage" = "https://github.com/neurallambda/arc-like"
+"Bug Tracker" = "https://github.com/neurallambda/arc-like/issues"

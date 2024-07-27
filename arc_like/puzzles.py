@@ -10,10 +10,8 @@ sense.
 
 from typing import Callable, List, Any, Tuple
 import random
-from torch.utils.data import TensorDataset
 import torch
 from dataclasses import dataclass
-from visualization import visualize_datasets
 
 
 @dataclass
@@ -503,6 +501,9 @@ def magnets(move_distance: int = 2) -> Combinator:
 # Demo
 
 if __name__ == '__main__':
+    from torch.utils.data import TensorDataset
+    from arc_like.visualization import visualize_datasets
+
     random.seed(42)
 
     colors = [1, 2, 3, 4, 6, 7, 8, 9]
