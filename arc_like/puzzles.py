@@ -47,15 +47,21 @@ def gen_some_blocks(colors: List[int], seq_length=48, background_color=0) -> Com
         init = [background_color] * seq_length
         current_color = background_color
         is_in_block = False
+        start = None
+        block_positions = []
+        
         for i in range(seq_length):
             if not is_in_block and random.random() > 0.5:  # start block
                 is_in_block = True
                 current_color = random.choice(colors)
+                start = i
             if is_in_block and random.random() > 0.8:  # terminate block
                 is_in_block = False
+                block_positions.append((start, i))
             if is_in_block:  # paint block
                 init[i] = current_color
-        return Sequence(init, init, None)
+            
+        return Sequence(init, init, {"block_positions": block_positions})
     return generator
 
 
@@ -470,10 +476,11 @@ def magnets(move_distance: int = 2) -> Combinator:
     def transformer(seq: Sequence) -> Sequence:
         inputs = seq.inputs
         outputs = inputs.copy()
-        block_positions = seq.metadata["block_positions"]
+        
+        block_positions = seq.metadata.get("block_positions")
 
-        if len(block_positions) < 2:
-            return seq  # Not enough blocks to perform the operation
+        if not block_positions or len(block_positions) < 2:
+            return seq  # Block Positions not defined, or Not enough blocks to perform the operation
 
         # Find the largest and smallest blocks
         largest_block = max(block_positions, key=lambda x: x[1] - x[0])
@@ -541,10 +548,47 @@ if __name__ == '__main__':
         ('magnets', compose([gen_n_blocks(colors, 2), magnets()])),
     ]
 
+    puzzles += [
+        ('magnets-5', compose([gen_n_blocks(colors, 5), magnets()])),
+        ('translate(2) + expand(2)', compose([gen_some_blocks(colors), translate(2), expand(2)])),
+        ('reflect(24) + shrink', compose([gen_one_block(colors), reflect(24), shrink])),
+        ('colorshift(3) + endpoints', compose([gen_three_blocks(colors), colorshift(3), endpoints])),
+        ('magnets-3 + repaint-from-max-block', compose([gen_n_blocks(colors, 3), magnets(), repaint_max_block])),
+        ('invert_colors + move_to_pivot', compose([gen_one_block(list(set(colors))), invert_colors, add_pivot, move_to_pivot])),
+        ('reflect(12) + translate(6)', compose([gen_three_blocks(colors), reflect(12), translate(6)])),
+        ('expand(3) + colorshift(1)', compose([gen_some_blocks(colors), expand(3), colorshift(1)])),
+        ('shrink + reflect(24)', compose([gen_some_blocks(colors), shrink, reflect(24)])),
+        ('remove_shortest + repaint-from-max', compose([gen_some_blocks(colors), remove_shortest_blocks, repaint_max_block])),
+        ('translate(3) + right_align', compose([gen_three_blocks(colors), translate(3), right_align])),
+        ('expand(2) + remove_longest', compose([gen_n_blocks(colors, 4), expand(2), remove_longest_blocks])),
+        ('invert_colors + reflect(12)', compose([gen_three_blocks(colors), invert_colors, reflect(12)])),
+        ('translate(5) + endpoints', compose([gen_some_blocks(colors), translate(5), endpoints])),
+        ('add_bg_noise + expand(2)', compose([gen_three_blocks(colors), add_bg_noise(0.2, colors), expand(2)])),
+        ('reflect(24) + magnets', compose([gen_n_blocks(colors, 2), reflect(24), magnets()])),
+        ('shrink + repaint-from-max', compose([gen_three_blocks(colors), shrink, repaint_max_block])),
+        ('colorshift(2) + sort_pixels', compose([gen_some_pixels(colors), colorshift(2), sort_pixels()])),        
+        ('magnets + reflect-pivot', compose([gen_n_blocks(colors, 3), magnets(), add_pivot, reflect_around_pivot])),
+        ('magnets + reflect-pivot-2', compose([gen_n_blocks(colors, 3), magnets(), add_pivot, reflect_around_pivot])),
+        ('magnets + invert + colorshift', compose([gen_n_blocks(colors, 8), magnets(), invert_colors, colorshift(2)])),
+        ('magnets + invert + colorshift-5', compose([gen_n_blocks(colors, 3), magnets(), invert_colors, colorshift(5)])),
+        ('magnets + invert + swap', compose([gen_n_blocks(colors, 3), magnets(), invert_colors, swap])),
+        ('reflect(9) + magnets', compose([gen_n_blocks(colors, 2), reflect(9), magnets()])),
+        ('sort_pixels-5.6', compose([gen_some_pixels(colors[:5], p=0.2), sort_pixels()])),
+        ('sort_pixels-5.6 + translate', compose([gen_some_pixels(colors[:5], p=0.2), sort_pixels(), translate(5)])),
+        ('magnets + reflect + colorshift(3)', compose([gen_n_blocks(colors, 4), magnets(), reflect(24), colorshift(3)])),
+        ('invert + translate(7) + expand(2)', compose([gen_one_block(colors), invert_colors, translate(7), expand(2)])),
+        ('rotate(2) + reflect(12) + magnets', compose([gen_n_blocks(colors, 2), reflect(12), magnets()])),
+        ('rotate(2) + reflect(12) + magnets', compose([gen_random_pixel_block(colors), reflect(12), magnets()])),
+        ('shrink + invert + translate(3)', compose([gen_three_blocks(colors), shrink, invert_colors, translate(3)])),
+        ('remove_shortest + reflect(18) + colorshift(1)', compose([gen_some_blocks(colors), remove_shortest_blocks, reflect(18), colorshift(1)])),
+        ('expand(3) + magnets + invert', compose([gen_some_blocks(colors), expand(3), magnets(), invert_colors])),
+        ('translate(6) + rotate(4) + shrink', compose([gen_n_blocks(colors, 3), translate(6), shrink])),
+    ]
+
     datasets = {}
     num_samples = 10
     grid_width = 7
-    grid_height = 5
+    grid_height = 10
     for (name, transformer) in puzzles:
         all_inputs, all_outputs = [], []
         for _ in range(num_samples):
