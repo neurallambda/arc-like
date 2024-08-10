@@ -78,4 +78,5 @@ Please add a puzzle as a PR, or, just tell me what you want on [X](https://x.com
 
 ## Gratitude
 
+* [`arcticbio`](https://github.com/arcticbio): Thank you for adding a ton of new puzzles, and cleaning up some logic!
 * [`rybla`](https://github.com/rybla): Thank you for adding composable combinators, this makes for a much cleaner, more extensible approach!
