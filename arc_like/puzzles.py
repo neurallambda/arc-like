@@ -473,14 +473,15 @@ def sort_pixels() -> Combinator:
 
 def magnets(move_distance: int = 2) -> Combinator:
     """Move the smaller block towards the larger block."""
+    """Only works with two blocks"""
     def transformer(seq: Sequence) -> Sequence:
         inputs = seq.inputs
         outputs = inputs.copy()
         
         block_positions = seq.metadata.get("block_positions")
 
-        if not block_positions or len(block_positions) < 2:
-            return seq  # Block Positions not defined, or Not enough blocks to perform the operation
+        if not block_positions or len(block_positions) <> 2:
+            return seq  # Block Positions not defined, or wrong number of blocks to perform the operation
 
         # Find the largest and smallest blocks
         largest_block = max(block_positions, key=lambda x: x[1] - x[0])
