@@ -477,10 +477,15 @@ def magnets(move_distance: int = 2) -> Combinator:
     def transformer(seq: Sequence) -> Sequence:
         inputs = seq.inputs
         outputs = inputs.copy()
-        
-        block_positions = seq.metadata.get("block_positions")
 
-        if not block_positions or len(block_positions) <> 2:
+        # Check if "block_postions" element is available in metadata
+        if seq.metadata is None or "block_positions" not in seq.metadata:
+            block_positions = None
+        else:
+            block_positions = seq.metadata.get("block_positions")
+
+        #Any more than two blocks will result in the moved block walking over top of the third block
+        if not block_positions or len(block_positions) != 2:
             return seq  # Block Positions not defined, or wrong number of blocks to perform the operation
 
         # Find the largest and smallest blocks
@@ -491,6 +496,7 @@ def magnets(move_distance: int = 2) -> Combinator:
         direction = 1 if largest_block[0] > smallest_block[0] else -1
 
         # Move the smaller block
+        #!! What if the travel distance is greater than the space between the two blocks?
         small_start, small_end = smallest_block
         new_start = small_start + direction * move_distance
         new_end = small_end + direction * move_distance
@@ -514,7 +520,7 @@ if __name__ == '__main__':
 
     random.seed(42)
 
-    colors = [1, 2, 3, 4, 6, 7, 8, 9]
+    colors = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     puzzles = [
         ('translate(4)', compose([gen_some_blocks(colors), translate(4)])),
@@ -550,40 +556,8 @@ if __name__ == '__main__':
     ]
 
     puzzles += [
-        ('magnets-5', compose([gen_n_blocks(colors, 5), magnets()])),
-        ('translate(2) + expand(2)', compose([gen_some_blocks(colors), translate(2), expand(2)])),
-        ('reflect(24) + shrink', compose([gen_one_block(colors), reflect(24), shrink])),
-        ('colorshift(3) + endpoints', compose([gen_three_blocks(colors), colorshift(3), endpoints])),
-        ('magnets-3 + repaint-from-max-block', compose([gen_n_blocks(colors, 3), magnets(), repaint_max_block])),
-        ('invert_colors + move_to_pivot', compose([gen_one_block(list(set(colors))), invert_colors, add_pivot, move_to_pivot])),
-        ('reflect(12) + translate(6)', compose([gen_three_blocks(colors), reflect(12), translate(6)])),
-        ('expand(3) + colorshift(1)', compose([gen_some_blocks(colors), expand(3), colorshift(1)])),
-        ('shrink + reflect(24)', compose([gen_some_blocks(colors), shrink, reflect(24)])),
-        ('remove_shortest + repaint-from-max', compose([gen_some_blocks(colors), remove_shortest_blocks, repaint_max_block])),
-        ('translate(3) + right_align', compose([gen_three_blocks(colors), translate(3), right_align])),
-        ('expand(2) + remove_longest', compose([gen_n_blocks(colors, 4), expand(2), remove_longest_blocks])),
-        ('invert_colors + reflect(12)', compose([gen_three_blocks(colors), invert_colors, reflect(12)])),
-        ('translate(5) + endpoints', compose([gen_some_blocks(colors), translate(5), endpoints])),
-        ('add_bg_noise + expand(2)', compose([gen_three_blocks(colors), add_bg_noise(0.2, colors), expand(2)])),
-        ('reflect(24) + magnets', compose([gen_n_blocks(colors, 2), reflect(24), magnets()])),
-        ('shrink + repaint-from-max', compose([gen_three_blocks(colors), shrink, repaint_max_block])),
-        ('colorshift(2) + sort_pixels', compose([gen_some_pixels(colors), colorshift(2), sort_pixels()])),        
-        ('magnets + reflect-pivot', compose([gen_n_blocks(colors, 3), magnets(), add_pivot, reflect_around_pivot])),
-        ('magnets + reflect-pivot-2', compose([gen_n_blocks(colors, 3), magnets(), add_pivot, reflect_around_pivot])),
-        ('magnets + invert + colorshift', compose([gen_n_blocks(colors, 8), magnets(), invert_colors, colorshift(2)])),
-        ('magnets + invert + colorshift-5', compose([gen_n_blocks(colors, 3), magnets(), invert_colors, colorshift(5)])),
-        ('magnets + invert + swap', compose([gen_n_blocks(colors, 3), magnets(), invert_colors, swap])),
-        ('reflect(9) + magnets', compose([gen_n_blocks(colors, 2), reflect(9), magnets()])),
-        ('sort_pixels-5.6', compose([gen_some_pixels(colors[:5], p=0.2), sort_pixels()])),
-        ('sort_pixels-5.6 + translate', compose([gen_some_pixels(colors[:5], p=0.2), sort_pixels(), translate(5)])),
-        ('magnets + reflect + colorshift(3)', compose([gen_n_blocks(colors, 4), magnets(), reflect(24), colorshift(3)])),
-        ('invert + translate(7) + expand(2)', compose([gen_one_block(colors), invert_colors, translate(7), expand(2)])),
-        ('rotate(2) + reflect(12) + magnets', compose([gen_n_blocks(colors, 2), reflect(12), magnets()])),
-        ('rotate(2) + reflect(12) + magnets', compose([gen_random_pixel_block(colors), reflect(12), magnets()])),
-        ('shrink + invert + translate(3)', compose([gen_three_blocks(colors), shrink, invert_colors, translate(3)])),
-        ('remove_shortest + reflect(18) + colorshift(1)', compose([gen_some_blocks(colors), remove_shortest_blocks, reflect(18), colorshift(1)])),
-        ('expand(3) + magnets + invert', compose([gen_some_blocks(colors), expand(3), magnets(), invert_colors])),
-        ('translate(6) + rotate(4) + shrink', compose([gen_n_blocks(colors, 3), translate(6), shrink])),
+        ('expand(2)', compose([gen_three_blocks(colors), expand(5)])),
+        ('magnets(5)', compose([gen_n_blocks(colors, 2, 48, 0, 6), magnets(5)])), 
     ]
 
     datasets = {}
