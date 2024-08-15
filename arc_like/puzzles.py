@@ -1,3 +1,4 @@
+
 '''
 
 Combinators for manipulating 1D sequences of integers. The integer value
@@ -34,6 +35,15 @@ class Sequence:
 # clean block becomes the input, so we `swap` them after noising.
 Combinator = Callable[[Sequence], Sequence]
 
+def find_all_contiguous_starts(available_positions, size):
+    """Finds all possible start positions in the available_positions list where a block of the given size can be placed contiguously; returns a list of start positions."""
+    start_positions = []
+    for i in range(len(available_positions) - size + 1):
+        # Check if the positions from available_positions[i] to available_positions[i + size - 1] are contiguous
+        if available_positions[i + size - 1] - available_positions[i] == size - 1:
+            # If contiguous, add the start position to the list
+            start_positions.append(available_positions[i])
+    return start_positions 
 
 ##########
 # Starting points
@@ -66,16 +76,20 @@ def gen_some_blocks(colors: List[int], seq_length=48, background_color=0) -> Com
 
 
 def gen_one_block(colors: List[int], seq_length=48, background_color=0) -> Combinator:
-    """ Generate a sequence of a single block with a random color. """
+    """ Generate a sequence of a single fixed size (5) block with a random color. """
     def generator(seq: Sequence) -> Sequence:
         block_size = 5
+        block_positions = []
         start_ix = random.randint(block_size, seq_length - block_size)
         end_ix = start_ix + block_size
         color = random.choice(colors)
 
         init = [background_color] * seq_length
         init[start_ix:end_ix] = [color] * block_size
-        return Sequence(init, init, None)
+        
+        block_positions.append((start_ix, end_ix))
+        
+        return Sequence(init, init, {"block_positions": block_positions})
     return generator
 
 
@@ -84,21 +98,31 @@ def gen_three_blocks(colors: List[int], seq_length=48, background_color=0) -> Co
     def generator(seq: Sequence) -> Sequence:
         init = [background_color] * seq_length
         block_sizes = [2, 4, 6]
+        block_positions = []
+        
         random.shuffle(block_sizes)
 
         available_positions = list(range(seq_length - max(block_sizes)))
+        available_colors = list(colors)
+
         for size in block_sizes:
             if not available_positions:
                 break
-            start = random.choice(available_positions)
-            color = random.choice(colors)
+
+            start = random.choice(find_all_contiguous_starts(available_positions, size))
+            color = random.choice(available_colors)
             init[start:start+size] = [color] * size
 
-            # Remove overlapping positions
+            #Metadata development to improve consistent composability
+            block_positions.append((start, start+size))           
+
+            # Remove inserted block positions from available_positions to avoid block overlap
             available_positions = [pos for pos in available_positions
                                    if pos + size <= start or pos >= start + size]
 
-        return Sequence(init, init, None)
+            # Remove used color from list to prevent adjacent blocks of the same color or confusion when one block runs over another of the same color
+            available_colors.remove(color)
+        return Sequence(init, init, {"block_positions": block_positions})
     return generator
 
 
@@ -112,18 +136,18 @@ def gen_n_blocks(colors: List[int], n: int, seq_length=48, background_color=0, m
         if total_block_size > seq_length:
             raise ValueError("Total block size exceeds sequence length")
 
-        available_positions = list(range(seq_length - total_block_size + 1))
+        available_positions = list(range(seq_length - max(block_sizes)))
         block_positions = []
 
         for size in block_sizes:
             if not available_positions:
                 break
-            start = random.choice(available_positions)
+            start = random.choice(find_all_contiguous_starts(available_positions, size))
             color = random.choice(colors)
             init[start:start+size] = [color] * size
             block_positions.append((start, start+size))
 
-            # Remove overlapping positions
+            # Remove inserted block positions from available_positions to avoid block overlap
             available_positions = [pos for pos in available_positions
                                    if pos + size <= start or pos >= start + size]
 
@@ -153,17 +177,19 @@ def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> 
 
 
 def gen_random_pixel_block(colors: List[int], seq_length=48, background_color=0, min_block_size=5, max_block_size=10) -> Combinator:
-    """Generate a sequence with a single block of random pixels."""
+    """Generate a sequence with a single variable length block of randomly colored pixels."""
     def generator(seq: Sequence) -> Sequence:
         block_size = random.randint(min_block_size, max_block_size)
+        block_positions = []
         start_ix = random.randint(0, seq_length - block_size)
         end_ix = start_ix + block_size
 
         init = [background_color] * seq_length
         block = [random.choice(colors) for _ in range(block_size)]
         init[start_ix:end_ix] = block
-
-        return Sequence(init, init, {"block_start": start_ix, "block_end": end_ix})
+        block_positions.append((start_ix, end_ix))
+        
+        return Sequence(init, init, {"block_positions": block_positions})
     return generator
 
 
@@ -443,14 +469,28 @@ def extend_to_pivot(seq: Sequence) -> Sequence:
     return Sequence(seq.inputs, new_outputs, seq.metadata)
 
 
-def rotate_block_pixels(n: int) -> Combinator:
-    """Rotate the pixels within the block by n positions. Depends on metadata from `gen_random_pixel_block`."""
+def rotate_block_pixels(n: int = None) -> Combinator:
+    """Select a random block for rotation, which will allow for more flexible composition; made rotation value optional, to provide more variability per puzzle definition"""
     def transformer(seq: Sequence) -> Sequence:
         outputs = seq.outputs.copy()
-        start = seq.metadata["block_start"]
-        end = seq.metadata["block_end"]
+
+         # Check if "block_postions" element is available in metadata
+        if seq.metadata is None or "block_positions" not in seq.metadata:
+            return seq
+        else:
+            block_positions = seq.metadata.get("block_positions")       
+
+        # Select random block for rotation
+        selected_block = random.choice(block_positions)
+        start, end = selected_block
+
+        # If n is not provided, set it to a random number between 1 and the length of the block
+        rotate_count = n
+        if rotate_count is None:
+            rotate_count = random.randint(1, end - start - 1)  # Random value if n is None
+        
         block = outputs[start:end]
-        rotated_block = block[-n:] + block[:-n]
+        rotated_block = block[-rotate_count:] + block[:-rotate_count]
         outputs[start:end] = rotated_block
         return Sequence(seq.inputs, outputs, seq.metadata)
     return transformer
@@ -472,31 +512,39 @@ def sort_pixels() -> Combinator:
 
 
 def magnets(move_distance: int = 2) -> Combinator:
-    """Move the smaller block towards the larger block."""
-    """Only works with two blocks"""
+    """Select two blocks and move the smaller block towards the larger block."""
+    """ If the travel distance is greater than the space between the two blocks, the moved block will overshoot the magnet"""
+    """ACTION: Create new transformer which aligns edges instead of just shifting in direction of the magnet (select random block, find adjacent, then align left or right edges)"""
     def transformer(seq: Sequence) -> Sequence:
         inputs = seq.inputs
         outputs = inputs.copy()
 
         # Check if "block_postions" element is available in metadata
         if seq.metadata is None or "block_positions" not in seq.metadata:
-            block_positions = None
+            #block_positions = None
+            return seq
         else:
             block_positions = seq.metadata.get("block_positions")
 
         #Any more than two blocks will result in the moved block walking over top of the third block
-        if not block_positions or len(block_positions) != 2:
-            return seq  # Block Positions not defined, or wrong number of blocks to perform the operation
+        if not block_positions or len(block_positions) < 2:
+            return seq  # Block Positions not defined, or insufficient blocks to perform the operation      
 
+        # Select a random block from the list
+        selected_block_positions = []
+        selected_block_positions.append(random.choice(block_positions))
+
+        # Select another random block from the remaining objects in the list
+        selected_block_positions.append(random.choice([block for block in block_positions if block not in selected_block_positions]))  
+        
         # Find the largest and smallest blocks
-        largest_block = max(block_positions, key=lambda x: x[1] - x[0])
-        smallest_block = min(block_positions, key=lambda x: x[1] - x[0])
+        largest_block = max(selected_block_positions, key=lambda x: x[1] - x[0])
+        smallest_block = min(selected_block_positions, key=lambda x: x[1] - x[0])
 
         # Determine direction to move
         direction = 1 if largest_block[0] > smallest_block[0] else -1
 
         # Move the smaller block
-        #!! What if the travel distance is greater than the space between the two blocks?
         small_start, small_end = smallest_block
         new_start = small_start + direction * move_distance
         new_end = small_end + direction * move_distance
@@ -556,14 +604,19 @@ if __name__ == '__main__':
     ]
 
     puzzles += [
-        ('expand(2)', compose([gen_three_blocks(colors), expand(5)])),
-        ('magnets(5)', compose([gen_n_blocks(colors, 2, 48, 0, 6), magnets(5)])), 
+        ('expand(5)', compose([gen_three_blocks(colors), expand(5)])),
+        ('magnets(9)', compose([gen_n_blocks(colors, 2, 48, 0, 6), magnets(9)])),
+        ('gen_three_test', compose([gen_three_blocks(colors)])),
+        ('rotate colored block (3)', compose([gen_random_pixel_block(colors), rotate_block_pixels(3)])),
+        ('rotate colored block (undefined)', compose([gen_random_pixel_block(colors), rotate_block_pixels()])),
+        ('magnet with three blocks', compose([gen_n_blocks(colors, 3), magnets(2)])),
+        ('magnet with four blocks', compose([gen_n_blocks(colors, 4), magnets(2)])),
     ]
 
     datasets = {}
     num_samples = 10
-    grid_width = 7
-    grid_height = 10
+    grid_width = 3
+    grid_height = 40
     for (name, transformer) in puzzles:
         all_inputs, all_outputs = [], []
         for _ in range(num_samples):
