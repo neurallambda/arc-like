@@ -469,8 +469,8 @@ def extend_to_pivot(seq: Sequence) -> Sequence:
     return Sequence(seq.inputs, new_outputs, seq.metadata)
 
 
-def rotate_block_pixels(n: int = None) -> Combinator:
-    """Select a random block for rotation, which will allow for more flexible composition; made rotation value optional, to provide more variability per puzzle definition"""
+def rotate_block_pixels(n: int) -> Combinator:
+    """Select the largest block for rotation, which will allow for more flexible composition"""
     def transformer(seq: Sequence) -> Sequence:
         outputs = seq.outputs.copy()
 
@@ -480,17 +480,12 @@ def rotate_block_pixels(n: int = None) -> Combinator:
         else:
             block_positions = seq.metadata.get("block_positions")       
 
-        # Select random block for rotation
-        selected_block = random.choice(block_positions)
+        # Select largest block for rotation
+        selected_block = max(block_positions, key=lambda x: x[1] - x[0])
         start, end = selected_block
-
-        # If n is not provided, set it to a random number between 1 and the length of the block
-        rotate_count = n
-        if rotate_count is None:
-            rotate_count = random.randint(1, end - start - 1)  # Random value if n is None
         
         block = outputs[start:end]
-        rotated_block = block[-rotate_count:] + block[:-rotate_count]
+        rotated_block = block[-n % len(block):] + block[:-n % len(block)]
         outputs[start:end] = rotated_block
         return Sequence(seq.inputs, outputs, seq.metadata)
     return transformer
@@ -511,17 +506,17 @@ def sort_pixels() -> Combinator:
     return transformer
 
 
-def magnets(move_distance: int = 2) -> Combinator:
-    """Select two blocks and move the smaller block towards the larger block."""
-    """ If the travel distance is greater than the space between the two blocks, the moved block will overshoot the magnet"""
+def magnets(move_distance: int = 2, reverse_pull: bool = 0) -> Combinator:
+    """Select largest and smallest blocks; move the smaller block towards the larger block."""
+    """ If the travel distance is greater than the space between the two blocks, the moved block will overshoot the magnet (could potentially re-name the function 'rail-gun')"""
     """ACTION: Create new transformer which aligns edges instead of just shifting in direction of the magnet (select random block, find adjacent, then align left or right edges)"""
     def transformer(seq: Sequence) -> Sequence:
         inputs = seq.inputs
-        outputs = inputs.copy()
+        outputs = seq.outputs.copy() # trying to use existing sequence outputs for extended composition chains
+        #outputs = inputs.copy() 
 
         # Check if "block_postions" element is available in metadata
         if seq.metadata is None or "block_positions" not in seq.metadata:
-            #block_positions = None
             return seq
         else:
             block_positions = seq.metadata.get("block_positions")
@@ -529,32 +524,41 @@ def magnets(move_distance: int = 2) -> Combinator:
         #Any more than two blocks will result in the moved block walking over top of the third block
         if not block_positions or len(block_positions) < 2:
             return seq  # Block Positions not defined, or insufficient blocks to perform the operation      
-
-        # Select a random block from the list
-        selected_block_positions = []
-        selected_block_positions.append(random.choice(block_positions))
-
-        # Select another random block from the remaining objects in the list
-        selected_block_positions.append(random.choice([block for block in block_positions if block not in selected_block_positions]))  
         
         # Find the largest and smallest blocks
-        largest_block = max(selected_block_positions, key=lambda x: x[1] - x[0])
-        smallest_block = min(selected_block_positions, key=lambda x: x[1] - x[0])
+        largest_block = max(block_positions, key=lambda x: x[1] - x[0])
+        smallest_block = min(block_positions, key=lambda x: x[1] - x[0])
+
+        if reverse_pull == 0:
+            anchor_block = largest_block
+            float_block = smallest_block
+        else:
+            anchor_block = smallest_block
+            float_block = largest_block
+
+        sequence_length = len(outputs)   
+        float_start, float_end = float_block  
+        block_color = outputs[float_start]  
+        
+        # Clear old position 
+        for i in range(float_start, float_end):
+            outputs[i % sequence_length] = 0 # Allows for eventual cases where incoming block definitions are wrapped
 
         # Determine direction to move
-        direction = 1 if largest_block[0] > smallest_block[0] else -1
+        direction = 1 if anchor_block[0] > float_block[0] else -1
+        
+        # Update floating block bounds, wrapping start and end positions
+        new_start = (float_start + direction * move_distance) % sequence_length
+        new_end = (float_end + direction * move_distance) % sequence_length
 
-        # Move the smaller block
-        small_start, small_end = smallest_block
-        new_start = small_start + direction * move_distance
-        new_end = small_end + direction * move_distance
+        # Paint new position, handling the case where new_end < new_start due to wrapping
+        if new_start < new_end:
+            outputs[new_start:new_end] = [block_color] * (new_end - new_start)
+        else:
+            outputs[new_start:] = [block_color] * (sequence_length - new_start)
+            outputs[:new_end] = [block_color] * new_end
 
-        # Ensure the new position is within bounds
-        if 0 <= new_start < len(outputs) and 0 <= new_end <= len(outputs):
-            block_color = outputs[small_start]
-            outputs[small_start:small_end] = [0] * (small_end - small_start)  # Clear old position
-            outputs[new_start:new_end] = [block_color] * (new_end - new_start)  # Set new position
-
+        #!! Should update metadata for new block bounds?
         return Sequence(inputs, outputs, seq.metadata)
     return transformer
 
@@ -604,19 +608,31 @@ if __name__ == '__main__':
     ]
 
     puzzles += [
-        ('expand(5)', compose([gen_three_blocks(colors), expand(5)])),
+        ('magnets reverse', compose([gen_n_blocks(colors, 2), magnets(2, 1)])),
         ('magnets(9)', compose([gen_n_blocks(colors, 2, 48, 0, 6), magnets(9)])),
-        ('gen_three_test', compose([gen_three_blocks(colors)])),
+        ('magnets reverse(9)', compose([gen_n_blocks(colors, 2, 48, 0, 6), magnets(9, 1)])),
+        ('magnets(-3 repell)', compose([gen_n_blocks(colors, 2, 48, 0, 6), magnets(-3)])),
+        ('magnets reverse (-5 repell)', compose([gen_n_blocks(colors, 2, 48, 0, 6), magnets(-5, 1)])),
+        ('magnets(30)', compose([gen_n_blocks(colors, 2, 48, 0, 6), magnets(30)])),
+        ('magnet(2) with three blocks', compose([gen_n_blocks(colors, 3), magnets(2)])),
+        ('magnet(3) with four blocks', compose([gen_n_blocks(colors, 4), magnets(3)])),        
+        ('translate(20)', compose([gen_some_blocks(colors), translate(20)])),      
+        ('expand(5)', compose([gen_three_blocks(colors), expand(5)])),
+        ('expand(3) colorshift(2)', compose([gen_three_blocks(colors), expand(3), colorshift(2)])),
+        ('gen_three sort pixels', compose([gen_three_blocks(colors), sort_pixels()])),
+        ('gen_three sort pixels translate(2)', compose([gen_three_blocks(colors), sort_pixels(), translate(2)])),
+        ('gen_three sort pixels magnets(2)', compose([gen_three_blocks(colors), sort_pixels(), magnets(2)])), #works with translate, but not with magnet as second operation
+        ('gen_some reflect around pivot', compose([gen_some_blocks(list(set(colors) - {5})), add_pivot, reflect_around_pivot])),
         ('rotate colored block (3)', compose([gen_random_pixel_block(colors), rotate_block_pixels(3)])),
-        ('rotate colored block (undefined)', compose([gen_random_pixel_block(colors), rotate_block_pixels()])),
-        ('magnet with three blocks', compose([gen_n_blocks(colors, 3), magnets(2)])),
-        ('magnet with four blocks', compose([gen_n_blocks(colors, 4), magnets(2)])),
+        ('rotate colored block (6)', compose([gen_random_pixel_block(colors), rotate_block_pixels(6)])),
+        ('rotate colored block (16)', compose([gen_random_pixel_block(colors), rotate_block_pixels(16)])),
+        ('reflect colored block (2-10)', compose([gen_random_pixel_block(list(set(colors) - {5}), 48, 0, 2, 10), add_pivot, reflect_around_pivot])),
     ]
 
     datasets = {}
     num_samples = 10
     grid_width = 3
-    grid_height = 40
+    grid_height = 25
     for (name, transformer) in puzzles:
         all_inputs, all_outputs = [], []
         for _ in range(num_samples):
