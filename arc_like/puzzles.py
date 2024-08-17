@@ -1,4 +1,3 @@
-
 '''
 
 Combinators for manipulating 1D sequences of integers. The integer value
@@ -13,7 +12,7 @@ from typing import Callable, List, Any, Tuple
 import random
 import torch
 from dataclasses import dataclass
-
+from itertools import chain
 
 @dataclass
 class Sequence:
@@ -51,7 +50,7 @@ def find_all_contiguous_starts(available_positions, size):
 #   These are combinators that ignore the input sequence (IE they should be
 #   used at the start of the chain) and create initial pixels
 
-def gen_some_blocks(colors: List[int], seq_length=48, background_color=0) -> Combinator:
+def gen_some_blocks(colors: List[int], seq_length, background_color=0) -> Combinator:
     """ Generate a sequence of blocks with random colors. """
     def generator(seq: Sequence) -> Sequence:
         init = [background_color] * seq_length
@@ -75,7 +74,7 @@ def gen_some_blocks(colors: List[int], seq_length=48, background_color=0) -> Com
     return generator
 
 
-def gen_one_block(colors: List[int], length=None, seq_length=48, background_color=0) -> Combinator:
+def gen_one_block(colors: List[int], length, seq_length, background_color=0) -> Combinator:
     """ Generate a sequence of a single fixed size (5) block with a random color. """
     def generator(seq: Sequence) -> Sequence:
         if length is None:
@@ -97,7 +96,7 @@ def gen_one_block(colors: List[int], length=None, seq_length=48, background_colo
     return generator
 
 
-def gen_three_blocks(colors: List[int], seq_length=48, background_color=0) -> Combinator:
+def gen_three_blocks(colors: List[int], seq_length, background_color=0) -> Combinator:
     """Generate a sequence with three blocks of sizes 2, 4, and 6."""
     def generator(seq: Sequence) -> Sequence:
         init = [background_color] * seq_length
@@ -130,7 +129,7 @@ def gen_three_blocks(colors: List[int], seq_length=48, background_color=0) -> Co
     return generator
 
 
-def gen_n_blocks(colors: List[int], n: int, seq_length=48, background_color=0, min_size=2) -> Combinator:
+def gen_n_blocks(colors: List[int], n: int, seq_length, background_color=0, min_size=2) -> Combinator:
     """Generate a sequence with n blocks of incrementing sizes."""
     def generator(seq: Sequence) -> Sequence:
         init = [background_color] * seq_length
@@ -159,7 +158,7 @@ def gen_n_blocks(colors: List[int], n: int, seq_length=48, background_color=0, m
     return generator
 
 
-def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> Combinator:
+def gen_some_pixels(colors: List[int], p: float, seq_length: int) -> Combinator:
     """
     Generate a sequence with pixels scattered randomly with probability p.
 
@@ -180,7 +179,7 @@ def gen_some_pixels(colors: List[int], p: float = 0.2, seq_length: int = 48) -> 
     return generator
 
 
-def gen_random_pixel_block(colors: List[int], seq_length=48, background_color=0, min_block_size=5, max_block_size=10) -> Combinator:
+def gen_random_pixel_block(colors: List[int], seq_length, background_color=0, min_block_size=5, max_block_size=10) -> Combinator:
     """Generate a sequence with a single variable length block of randomly colored pixels."""
     def generator(seq: Sequence) -> Sequence:
         block_size = random.randint(min_block_size, max_block_size)
@@ -316,15 +315,29 @@ def right_align(seq: Sequence) -> Sequence:
     return Sequence(seq.inputs, aligned_outputs, seq.metadata)
 
 
-def add_bg_noise(p, colors: List[int], background_color: int = 0) -> Combinator:
-    """Add noise to the background pixels of the output sequence."""
+def add_bg_noise(p: float, colors: List[int], background_color: int = 0) -> Combinator:
+    """
+    Add noise to the background pixels of the output sequence.
+    Ensures that noise pixels are not the same color as adjacent pixels (including other noise pixels)
+    """
     def transformer(seq: Sequence) -> Sequence:
-        outputs = seq.outputs
-        new_outputs = [
-            random.choice([0] + [c for c in colors if c != 0]) if pixel == background_color and random.random() < p else pixel
-            for pixel in outputs
-        ]
-        return Sequence(seq.inputs, new_outputs, seq.metadata)
+        outputs = seq.outputs.copy()
+        length = len(outputs)
+
+        for i in range(length):
+            if outputs[i] == background_color and random.random() < p:
+                # Get colors of adjacent pixels
+                left_color = outputs[i - 1] if i > 0 else None
+                right_color = outputs[i + 1] if i < length - 1 else None
+
+                # Create a list of valid noise colors
+                valid_colors = [c for c in colors if c != background_color and c != left_color and c != right_color]
+
+                # If there are valid colors to choose from, add a noise pixel
+                if valid_colors:
+                    outputs[i] = random.choice(valid_colors)
+
+        return Sequence(seq.inputs, outputs, seq.metadata)
     return transformer
 
 
@@ -433,7 +446,13 @@ def move_to_pivot(seq: Sequence, background_color=0) -> Sequence:
     # find the block
     block_start = next(i for i, color in enumerate(outputs) if color != background_color and color != pivot_color)
     block_color = outputs[block_start]
-    block_end = next((i for i in range(block_start + 1, len(outputs)) if outputs[i] != block_color), len(outputs))
+    # block_end = next((i for i in range(block_start + 1, len(outputs)) if outputs[i] != block_color), len(outputs))
+    block_end = next(chain(
+        # iterate through all positions beyond block
+        (i for i in range(block_start + 1, len(outputs)) if outputs[i] != block_color),
+        # block goes all the way to the end
+        [len(outputs)]))
+
     block_length = block_end - block_start
 
     # new outputs
@@ -452,10 +471,16 @@ def extend_to_pivot(seq: Sequence) -> Sequence:
     outputs = seq.outputs
     pivot_index = seq.metadata["pivot_index"]
     pivot_color = outputs[pivot_index]
-    
+
     # find the block
     block_start = next(i for i, color in enumerate(outputs) if color != 0 and color != pivot_color)
-    block_end = next((i for i in range(block_start + 1, len(outputs)) if outputs[i] != outputs[block_start]), len(outputs)) #Added handling for block against the end of sequence
+    # block_end = next((i for i in range(block_start + 1, len(outputs)) if outputs[i] != outputs[block_start]), len(outputs)) #Added handling for block against the end of sequence
+    block_end = next(chain(
+        # iterate through all positions beyond block
+        (i for i in range(block_start + 1, len(outputs)) if outputs[i] != outputs[block_start]),
+        # block goes all the way to the end
+        [len(outputs)]))
+
     block_color = outputs[block_start]
 
     # determine new block boundaries
@@ -575,39 +600,40 @@ if __name__ == '__main__':
 
     random.seed(42)
 
+    SEQ_LEN = 25
     colors = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     puzzles = [
-        ('translate(4)', compose([gen_some_blocks(colors), translate(4)])),
-        ('reflect(seq_len//2)', compose([gen_one_block(colors, 5), reflect(24)])),
-        ('colorshift(2)', compose([gen_some_blocks(colors), colorshift(2)])),
-        ('translate(4) + reflect(seq_len//2)', compose([gen_some_blocks(colors), translate(4), reflect(24)])),
-        ('translate(4) + colorshift(2)', compose([gen_some_blocks(colors), translate(4), colorshift(2)])),
-        ('expand(1)', compose([gen_some_blocks(colors), expand(1)])),
-        ('expand(1) expand(1)', compose([gen_some_blocks(colors), expand(1), expand(1)])),
-        ('expand(1) + colorshift(2)', compose([gen_some_blocks(colors), expand(1), colorshift(2)])),
-        ('expand(1) + translate(1)', compose([gen_some_blocks(colors), expand(1), translate(1)])),
-        ('shrink', compose([gen_some_blocks(colors), shrink])),
-        ('shrink + expand(2)', compose([gen_some_blocks(colors), shrink, expand(2)])),
-        ('endpoints', compose([gen_some_blocks(colors), endpoints])),
-        ('infill', compose([gen_some_blocks(colors), endpoints, swap])),
-        ('expand(1) + endpoints', compose([gen_one_block(colors, 5), expand(1), endpoints])),
-        ('endpoints + expand(1)', compose([gen_one_block(colors, 5), endpoints, expand(1)])),
-        ('endpoints + expand(4) + endpoints + expand(1)', compose([gen_one_block(colors), endpoints, expand(4), endpoints, expand(1)])),
-        ('right_align', compose([gen_some_pixels(colors), right_align])),
-        ('denoise', compose([gen_one_block(colors, 5), swap, add_bg_noise(0.3, colors), swap])),
-        ('invert_colors', compose([gen_one_block(colors, 5), invert_colors])),
-        ('remove_longest_blocks', compose([gen_some_blocks(colors), remove_longest_blocks])),
-        ('remove_shortest_blocks', compose([gen_some_blocks(colors), remove_shortest_blocks])),
-        ('remove_longest + endpoints', compose([gen_some_blocks(colors), remove_longest_blocks, endpoints])),
-        ('reflect-pivot', compose([gen_some_blocks(list(set(colors) - {5})), add_pivot, reflect_around_pivot])),
-        ('reflect-pivot + shrink', compose([gen_one_block(list(set(colors) - {5}), 5), add_pivot, reflect_around_pivot, shrink])),
-        ('repaint-from-max-block', compose([gen_three_blocks(colors), repaint_max_block])),
-        ('move_to_pivot', compose([gen_one_block(list(set(colors) - {5}), 5), add_pivot, move_to_pivot])),
-        ('extend_to_pivot', compose([gen_one_block(list(set(colors) - {5}), 5), add_pivot, extend_to_pivot])),
-        ('rotate colored block', compose([gen_random_pixel_block(colors), rotate_block_pixels(1)])),
-        ('sort_pixels', compose([gen_some_pixels(colors[:3], p=0.1), sort_pixels()])),
-        ('magnets', compose([gen_n_blocks(colors, 2), magnets()])),
+        ('translate(4)', compose([gen_some_blocks(colors, SEQ_LEN), translate(4)])),
+        ('reflect(seq_len//2)', compose([gen_one_block(colors, 5, SEQ_LEN), reflect(24)])),
+        ('colorshift(2)', compose([gen_some_blocks(colors, SEQ_LEN), colorshift(2)])),
+        ('translate(4) + reflect(seq_len//2)', compose([gen_some_blocks(colors, SEQ_LEN), translate(4), reflect(24)])),
+        ('translate(4) + colorshift(2)', compose([gen_some_blocks(colors, SEQ_LEN), translate(4), colorshift(2)])),
+        ('expand(1)', compose([gen_some_blocks(colors, SEQ_LEN), expand(1)])),
+        ('expand(1) expand(1)', compose([gen_some_blocks(colors, SEQ_LEN), expand(1), expand(1)])),
+        ('expand(1) + colorshift(2)', compose([gen_some_blocks(colors, SEQ_LEN), expand(1), colorshift(2)])),
+        ('expand(1) + translate(1)', compose([gen_some_blocks(colors, SEQ_LEN), expand(1), translate(1)])),
+        ('shrink', compose([gen_some_blocks(colors, SEQ_LEN), shrink])),
+        ('shrink + expand(2)', compose([gen_some_blocks(colors, SEQ_LEN), shrink, expand(2)])),
+        ('endpoints', compose([gen_some_blocks(colors, SEQ_LEN), endpoints])),
+        ('infill', compose([gen_some_blocks(colors, SEQ_LEN), endpoints, swap])),
+        ('expand(1) + endpoints', compose([gen_one_block(colors, 5, SEQ_LEN), expand(1), endpoints])),
+        ('endpoints + expand(1)', compose([gen_one_block(colors, 5, SEQ_LEN), endpoints, expand(1)])),
+        ('endpoints + expand(4) + endpoints + expand(1)', compose([gen_one_block(colors, 5, SEQ_LEN), endpoints, expand(4), endpoints, expand(1)])),
+        ('right_align', compose([gen_some_pixels(colors, p=0.1, seq_length=SEQ_LEN), right_align])),
+        ('denoise', compose([gen_one_block(colors, 5, SEQ_LEN), swap, add_bg_noise(0.3, colors), swap])),
+        ('invert_colors', compose([gen_one_block(colors, 5, SEQ_LEN), invert_colors])),
+        ('remove_longest_blocks', compose([gen_some_blocks(colors, SEQ_LEN), remove_longest_blocks])),
+        ('remove_shortest_blocks', compose([gen_some_blocks(colors, SEQ_LEN), remove_shortest_blocks])),
+        ('remove_longest + endpoints', compose([gen_some_blocks(colors, SEQ_LEN), remove_longest_blocks, endpoints])),
+        ('reflect-pivot', compose([gen_some_blocks(list(set(colors) - {5}), SEQ_LEN), add_pivot, reflect_around_pivot])),
+        ('reflect-pivot + shrink', compose([gen_one_block(list(set(colors) - {5}), 5, SEQ_LEN), add_pivot, reflect_around_pivot, shrink])),
+        ('repaint-from-max-block', compose([gen_three_blocks(colors, SEQ_LEN), repaint_max_block])),
+        ('move_to_pivot', compose([gen_one_block(list(set(colors) - {5}), 5, SEQ_LEN), add_pivot, move_to_pivot])),
+        ('extend_to_pivot', compose([gen_one_block(list(set(colors) - {5}), 5, SEQ_LEN), add_pivot, extend_to_pivot])),
+        ('rotate colored block', compose([gen_random_pixel_block(colors, SEQ_LEN), rotate_block_pixels(1)])),
+        ('sort_pixels', compose([gen_some_pixels(colors[:3], p=0.1, seq_length=SEQ_LEN), sort_pixels()])),
+        ('magnets', compose([gen_n_blocks(colors, 2, SEQ_LEN), magnets()])),
     ]
 
     puzzles += [
