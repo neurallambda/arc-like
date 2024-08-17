@@ -75,12 +75,16 @@ def gen_some_blocks(colors: List[int], seq_length=48, background_color=0) -> Com
     return generator
 
 
-def gen_one_block(colors: List[int], seq_length=48, background_color=0) -> Combinator:
+def gen_one_block(colors: List[int], length=None, seq_length=48, background_color=0) -> Combinator:
     """ Generate a sequence of a single fixed size (5) block with a random color. """
     def generator(seq: Sequence) -> Sequence:
-        block_size = 5
+        if length is None:
+            block_size = random.randint(2, seq_length - 2)
+        else:
+            block_size = length
+        
         block_positions = []
-        start_ix = random.randint(block_size, seq_length - block_size)
+        start_ix = random.randint(0, seq_length - block_size)
         end_ix = start_ix + block_size
         color = random.choice(colors)
 
@@ -429,7 +433,7 @@ def move_to_pivot(seq: Sequence, background_color=0) -> Sequence:
     # find the block
     block_start = next(i for i, color in enumerate(outputs) if color != background_color and color != pivot_color)
     block_color = outputs[block_start]
-    block_end = next(i for i in range(block_start + 1, len(outputs)) if outputs[i] != block_color)
+    block_end = next((i for i in range(block_start + 1, len(outputs)) if outputs[i] != block_color), len(outputs))
     block_length = block_end - block_start
 
     # new outputs
@@ -448,10 +452,10 @@ def extend_to_pivot(seq: Sequence) -> Sequence:
     outputs = seq.outputs
     pivot_index = seq.metadata["pivot_index"]
     pivot_color = outputs[pivot_index]
-
+    
     # find the block
     block_start = next(i for i, color in enumerate(outputs) if color != 0 and color != pivot_color)
-    block_end = next(i for i in range(block_start + 1, len(outputs)) if outputs[i] != outputs[block_start])
+    block_end = next((i for i in range(block_start + 1, len(outputs)) if outputs[i] != outputs[block_start]), len(outputs)) #Added handling for block against the end of sequence
     block_color = outputs[block_start]
 
     # determine new block boundaries
@@ -509,11 +513,10 @@ def sort_pixels() -> Combinator:
 def magnets(move_distance: int = 2, reverse_pull: bool = 0) -> Combinator:
     """Select largest and smallest blocks; move the smaller block towards the larger block."""
     """ If the travel distance is greater than the space between the two blocks, the moved block will overshoot the magnet (could potentially re-name the function 'rail-gun')"""
-    """ACTION: Create new transformer which aligns edges instead of just shifting in direction of the magnet (select random block, find adjacent, then align left or right edges)"""
+    """ACTION: Create new transformer which aligns edges instead of just shifting in direction of the magnet (select block by known attribute, find adjacent, then align left or right edges)"""
     def transformer(seq: Sequence) -> Sequence:
         inputs = seq.inputs
         outputs = seq.outputs.copy() # trying to use existing sequence outputs for extended composition chains
-        #outputs = inputs.copy() 
 
         # Check if "block_postions" element is available in metadata
         if seq.metadata is None or "block_positions" not in seq.metadata:
@@ -576,7 +579,7 @@ if __name__ == '__main__':
 
     puzzles = [
         ('translate(4)', compose([gen_some_blocks(colors), translate(4)])),
-        ('reflect(seq_len//2)', compose([gen_one_block(colors), reflect(24)])),
+        ('reflect(seq_len//2)', compose([gen_one_block(colors, 5), reflect(24)])),
         ('colorshift(2)', compose([gen_some_blocks(colors), colorshift(2)])),
         ('translate(4) + reflect(seq_len//2)', compose([gen_some_blocks(colors), translate(4), reflect(24)])),
         ('translate(4) + colorshift(2)', compose([gen_some_blocks(colors), translate(4), colorshift(2)])),
@@ -588,20 +591,20 @@ if __name__ == '__main__':
         ('shrink + expand(2)', compose([gen_some_blocks(colors), shrink, expand(2)])),
         ('endpoints', compose([gen_some_blocks(colors), endpoints])),
         ('infill', compose([gen_some_blocks(colors), endpoints, swap])),
-        ('expand(1) + endpoints', compose([gen_one_block(colors), expand(1), endpoints])),
-        ('endpoints + expand(1)', compose([gen_one_block(colors), endpoints, expand(1)])),
+        ('expand(1) + endpoints', compose([gen_one_block(colors, 5), expand(1), endpoints])),
+        ('endpoints + expand(1)', compose([gen_one_block(colors, 5), endpoints, expand(1)])),
         ('endpoints + expand(4) + endpoints + expand(1)', compose([gen_one_block(colors), endpoints, expand(4), endpoints, expand(1)])),
         ('right_align', compose([gen_some_pixels(colors), right_align])),
-        ('denoise', compose([gen_one_block(colors), swap, add_bg_noise(0.3, colors), swap])),
-        ('invert_colors', compose([gen_one_block(colors), invert_colors])),
+        ('denoise', compose([gen_one_block(colors, 5), swap, add_bg_noise(0.3, colors), swap])),
+        ('invert_colors', compose([gen_one_block(colors, 5), invert_colors])),
         ('remove_longest_blocks', compose([gen_some_blocks(colors), remove_longest_blocks])),
         ('remove_shortest_blocks', compose([gen_some_blocks(colors), remove_shortest_blocks])),
         ('remove_longest + endpoints', compose([gen_some_blocks(colors), remove_longest_blocks, endpoints])),
         ('reflect-pivot', compose([gen_some_blocks(list(set(colors) - {5})), add_pivot, reflect_around_pivot])),
-        ('reflect-pivot + shrink', compose([gen_one_block(list(set(colors) - {5})), add_pivot, reflect_around_pivot, shrink])),
+        ('reflect-pivot + shrink', compose([gen_one_block(list(set(colors) - {5}), 5), add_pivot, reflect_around_pivot, shrink])),
         ('repaint-from-max-block', compose([gen_three_blocks(colors), repaint_max_block])),
-        ('move_to_pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, move_to_pivot])),
-        ('extend_to_pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, extend_to_pivot])),
+        ('move_to_pivot', compose([gen_one_block(list(set(colors) - {5}), 5), add_pivot, move_to_pivot])),
+        ('extend_to_pivot', compose([gen_one_block(list(set(colors) - {5}), 5), add_pivot, extend_to_pivot])),
         ('rotate colored block', compose([gen_random_pixel_block(colors), rotate_block_pixels(1)])),
         ('sort_pixels', compose([gen_some_pixels(colors[:3], p=0.1), sort_pixels()])),
         ('magnets', compose([gen_n_blocks(colors, 2), magnets()])),
@@ -621,12 +624,15 @@ if __name__ == '__main__':
         ('expand(3) colorshift(2)', compose([gen_three_blocks(colors), expand(3), colorshift(2)])),
         ('gen_three sort pixels', compose([gen_three_blocks(colors), sort_pixels()])),
         ('gen_three sort pixels translate(2)', compose([gen_three_blocks(colors), sort_pixels(), translate(2)])),
-        ('gen_three sort pixels magnets(2)', compose([gen_three_blocks(colors), sort_pixels(), magnets(2)])), #works with translate, but not with magnet as second operation
+        ('gen_three sort pixels magnets(2)', compose([gen_three_blocks(colors), sort_pixels(), magnets(2)])),
         ('gen_some reflect around pivot', compose([gen_some_blocks(list(set(colors) - {5})), add_pivot, reflect_around_pivot])),
         ('rotate colored block (3)', compose([gen_random_pixel_block(colors), rotate_block_pixels(3)])),
         ('rotate colored block (6)', compose([gen_random_pixel_block(colors), rotate_block_pixels(6)])),
         ('rotate colored block (16)', compose([gen_random_pixel_block(colors), rotate_block_pixels(16)])),
         ('reflect colored block (2-10)', compose([gen_random_pixel_block(list(set(colors) - {5}), 48, 0, 2, 10), add_pivot, reflect_around_pivot])),
+        ('one block (9) move to pivot', compose([gen_one_block(list(set(colors) - {5}), 9), add_pivot, move_to_pivot])),
+        ('one block (undefined) move to pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, move_to_pivot])),
+        ('one block (undefined) extend to pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, extend_to_pivot])),
     ]
 
     datasets = {}
