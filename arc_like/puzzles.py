@@ -633,6 +633,7 @@ if __name__ == '__main__':
         ('one block (9) move to pivot', compose([gen_one_block(list(set(colors) - {5}), 9), add_pivot, move_to_pivot])),
         ('one block (undefined) move to pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, move_to_pivot])),
         ('one block (undefined) extend to pivot', compose([gen_one_block(list(set(colors) - {5})), add_pivot, extend_to_pivot])),
+        ('one block (undefined) invert_colors', compose([gen_one_block(colors), invert_colors])),
     ]
 
     datasets = {}
